@@ -1,20 +1,35 @@
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
-use notify::{
-    event::{EventKind, ModifyKind, RenameMode},
-    Config, RecommendedWatcher, RecursiveMode, Watcher,
-};
+use notify::{event::EventKind, Config, RecommendedWatcher, RecursiveMode, Watcher};
 use tokio::sync::mpsc;
 use tracing::{debug, info, warn};
 
-use crate::registry::{capsule_id_from_path, load_manifest_file, Registry};
+use crate::registry::{
+    capsule_id_from_path, is_manifest_filename, load_manifest_file, ManifestLoadError, Registry,
+};
+
+/// How long a path must be quiet before we act on it. Coalesces the burst of
+/// events that fires during a single logical write (Obsidian adapter close →
+/// Syncthing propagation → macOS AppleDouble side-writes, etc.) into one
+/// read. 150ms is long enough to absorb normal filesystem chatter and short
+/// enough that the daemon feels instant to a user editing a note.
+const DEBOUNCE: Duration = Duration::from_millis(150);
+
+/// Fallback sleep when no paths are pending. Any new event cancels it via
+/// `select!`, so the magnitude doesn't matter — just keep it bounded so
+/// the task isn't blocked indefinitely if rx is dropped cleanly.
+const IDLE_SLEEP: Duration = Duration::from_secs(3600);
 
 /// Spawn a filesystem watcher on `<capsule_dir>/manifests/`. Returns a handle
 /// that keeps the watcher alive; dropping it stops watching.
 ///
-/// The watcher reloads the registry entry for each Create/Modify event and
-/// removes the entry on Remove. Unparseable files are logged and skipped —
-/// the daemon continues serving whatever is already in the registry.
+/// Events are coalesced per-path with a short debounce. After the quiet
+/// window, the path is read fresh: if the file exists, the manifest is
+/// (re-)inserted; if not, the capsule is removed from the registry. This
+/// means the event kind (Create/Modify/Remove) doesn't affect correctness —
+/// only the final filesystem state does.
 pub fn spawn(capsule_dir: &Path, registry: Registry) -> anyhow::Result<WatcherHandle> {
     let manifests_dir = capsule_dir.join("manifests");
     std::fs::create_dir_all(&manifests_dir)?;
@@ -32,10 +47,20 @@ pub fn spawn(capsule_dir: &Path, registry: Registry) -> anyhow::Result<WatcherHa
 
     let dir_for_task = manifests_dir.clone();
     let task = tokio::spawn(async move {
-        while let Some(res) = rx.recv().await {
-            match res {
-                Ok(event) => handle_event(event, &dir_for_task, &registry),
-                Err(e) => warn!(error = %e, "fs watcher error"),
+        let mut pending: HashMap<PathBuf, Instant> = HashMap::new();
+        loop {
+            let wait = next_wait(&pending);
+            tokio::select! {
+                maybe_evt = rx.recv() => {
+                    let Some(res) = maybe_evt else { break; };
+                    match res {
+                        Ok(event) => collect_paths(event, &dir_for_task, &mut pending),
+                        Err(e) => warn!(error = %e, "fs watcher error"),
+                    }
+                }
+                _ = tokio::time::sleep(wait) => {
+                    drain_ready(&mut pending, &registry);
+                }
             }
         }
         debug!("fs watcher task exiting");
@@ -47,34 +72,52 @@ pub fn spawn(capsule_dir: &Path, registry: Registry) -> anyhow::Result<WatcherHa
     })
 }
 
-fn handle_event(event: notify::Event, manifests_dir: &Path, registry: &Registry) {
+fn next_wait(pending: &HashMap<PathBuf, Instant>) -> Duration {
+    let Some(soonest) = pending.values().min().copied() else {
+        return IDLE_SLEEP;
+    };
+    soonest.saturating_duration_since(Instant::now())
+}
+
+fn collect_paths(
+    event: notify::Event,
+    manifests_dir: &Path,
+    pending: &mut HashMap<PathBuf, Instant>,
+) {
     let is_relevant = matches!(
         event.kind,
-        EventKind::Create(_)
-            | EventKind::Modify(ModifyKind::Data(_))
-            | EventKind::Modify(ModifyKind::Name(RenameMode::To))
-            | EventKind::Modify(ModifyKind::Any)
-            | EventKind::Remove(_)
+        EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
     );
     if !is_relevant {
         return;
     }
-
+    let deadline = Instant::now() + DEBOUNCE;
     for path in event.paths {
-        // Defense-in-depth: only react to paths inside the watched dir and
-        // ending in .json. notify should only deliver those, but a symlink
-        // or race could in principle smuggle one in.
-        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+        if !is_manifest_filename(&path) {
             continue;
         }
         if path.parent() != Some(manifests_dir) {
             continue;
         }
+        // Overwrite to extend the quiet window on every event. We only act
+        // once the path has been quiet for the full DEBOUNCE duration.
+        pending.insert(path, deadline);
+    }
+}
 
-        match event.kind {
-            EventKind::Remove(_) => handle_removal(&path, registry),
-            _ if path.exists() => handle_upsert(&path, registry),
-            _ => handle_removal(&path, registry),
+fn drain_ready(pending: &mut HashMap<PathBuf, Instant>, registry: &Registry) {
+    let now = Instant::now();
+    let ready: Vec<PathBuf> = pending
+        .iter()
+        .filter(|(_, deadline)| **deadline <= now)
+        .map(|(path, _)| path.clone())
+        .collect();
+    for path in ready {
+        pending.remove(&path);
+        if path.exists() {
+            handle_upsert(&path, registry);
+        } else {
+            handle_removal(&path, registry);
         }
     }
 }
@@ -88,6 +131,13 @@ fn handle_upsert(path: &Path, registry: &Registry) {
                 "manifest registered"
             );
             registry.insert(manifest);
+        }
+        Err(ManifestLoadError::PartialFile) => {
+            // Writer wasn't really done despite the debounce. Debug-level;
+            // the next event (or a later one during the same write sequence)
+            // will retry. If it never recovers, the user will notice the
+            // capsule never registering — louder signal than a log warning.
+            debug!(path = %path.display(), "transient partial file, retrying on next event");
         }
         Err(e) => {
             warn!(path = %path.display(), error = %e, "failed to load manifest");
@@ -115,7 +165,6 @@ mod tests {
     use super::*;
     use crate::manifest::{CapsuleId, CapsuleStatus, ComputationClass, Manifest};
     use std::path::PathBuf;
-    use std::time::Duration;
 
     fn tempdir() -> PathBuf {
         use std::time::{SystemTime, UNIX_EPOCH};
@@ -160,7 +209,7 @@ mod tests {
         let path = capsule_dir.join("manifests").join("cap_watch1.json");
         std::fs::write(&path, serde_json::to_string(&manifest).unwrap()).unwrap();
 
-        // Poll up to 2s for the registry to reflect the write.
+        // Poll up to 2s. Debounce adds ~150ms, so headroom is plenty.
         let found = poll_for(|| registry.len() == 1, Duration::from_secs(2)).await;
         assert!(found, "expected registry to contain new manifest");
 
@@ -169,6 +218,74 @@ mod tests {
         let empty = poll_for(|| registry.is_empty(), Duration::from_secs(2)).await;
         assert!(empty, "expected registry to drop removed manifest");
 
+        let _ = std::fs::remove_dir_all(&vault);
+    }
+
+    /// AppleDouble files (macOS metadata) and plugin-side `.tmp` files must
+    /// never reach the registry. The filter lives in registry.rs but the
+    /// watcher is the hot path that matters in production.
+    #[tokio::test]
+    async fn watcher_ignores_hidden_and_tmp_files() {
+        let vault = tempdir();
+        let capsule_dir = vault.join(".capsule");
+        let manifests = capsule_dir.join("manifests");
+        std::fs::create_dir_all(&manifests).unwrap();
+
+        let registry = Registry::new();
+        let _handle = spawn(&capsule_dir, registry.clone()).unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        // AppleDouble side-car that Syncthing-from-Mac produces.
+        std::fs::write(manifests.join("._cap_abc.json"), "garbage").unwrap();
+        // Plugin atomic-write tempfile (ends in .tmp, not .json).
+        std::fs::write(manifests.join("cap_abc.json.tmp"), "{}").unwrap();
+
+        // Give the watcher + debounce plenty of time to NOT register anything.
+        tokio::time::sleep(DEBOUNCE + Duration::from_millis(300)).await;
+        assert!(
+            registry.is_empty(),
+            "registry should ignore hidden and tmp files"
+        );
+
+        // Now a real manifest lands — it should register.
+        let manifest = sample("cap_abc");
+        std::fs::write(
+            manifests.join("cap_abc.json"),
+            serde_json::to_string(&manifest).unwrap(),
+        )
+        .unwrap();
+        let found = poll_for(|| registry.len() == 1, Duration::from_secs(2)).await;
+        assert!(found, "real manifest should register after noise");
+
+        let _ = std::fs::remove_dir_all(&vault);
+    }
+
+    /// A burst of writes during a single logical save must coalesce into one
+    /// registry update, not one per event. We simulate the partial-then-
+    /// final pattern observed in production: empty file first, then the
+    /// real content.
+    #[tokio::test]
+    async fn watcher_coalesces_partial_then_final_write() {
+        let vault = tempdir();
+        let capsule_dir = vault.join(".capsule");
+        let manifests = capsule_dir.join("manifests");
+        std::fs::create_dir_all(&manifests).unwrap();
+
+        let registry = Registry::new();
+        let _handle = spawn(&capsule_dir, registry.clone()).unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let path = manifests.join("cap_burst.json");
+        // Simulate three rapid writes within the debounce window.
+        std::fs::write(&path, "").unwrap();
+        std::fs::write(&path, "{").unwrap();
+        std::fs::write(&path, serde_json::to_string(&sample("cap_burst")).unwrap()).unwrap();
+
+        let found = poll_for(|| registry.len() == 1, Duration::from_secs(2)).await;
+        assert!(
+            found,
+            "expected burst-write to resolve to a single registered manifest"
+        );
         let _ = std::fs::remove_dir_all(&vault);
     }
 

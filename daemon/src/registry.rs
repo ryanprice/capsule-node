@@ -73,7 +73,7 @@ pub fn load_from_disk(registry: &Registry, capsule_dir: &Path) -> std::io::Resul
     for entry in std::fs::read_dir(&manifests_dir)? {
         let entry = entry?;
         let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+        if !is_manifest_filename(&path) {
             continue;
         }
         match load_manifest_file(&path) {
@@ -81,6 +81,12 @@ pub fn load_from_disk(registry: &Registry, capsule_dir: &Path) -> std::io::Resul
                 debug!(capsule_id = %manifest.capsule_id, path = %path.display(), "loaded manifest");
                 registry.insert(manifest);
                 loaded += 1;
+            }
+            Err(ManifestLoadError::PartialFile) => {
+                // A 0-byte or mid-parse file at boot means the writer was
+                // interrupted. Skip quietly — not an operator-actionable
+                // condition, and the next event will surface it.
+                debug!(path = %path.display(), "skipping partial manifest file");
             }
             Err(e) => {
                 warn!(path = %path.display(), error = %e, "skipping unparseable manifest");
@@ -93,7 +99,20 @@ pub fn load_from_disk(registry: &Registry, capsule_dir: &Path) -> std::io::Resul
 
 pub fn load_manifest_file(path: &Path) -> Result<Manifest, ManifestLoadError> {
     let bytes = std::fs::read(path).map_err(ManifestLoadError::Io)?;
-    let manifest: Manifest = serde_json::from_slice(&bytes).map_err(ManifestLoadError::Parse)?;
+    if bytes.is_empty() {
+        return Err(ManifestLoadError::PartialFile);
+    }
+    let manifest: Manifest = serde_json::from_slice(&bytes).map_err(|e| {
+        // `is_eof()` fires when the file is truncated mid-JSON — classic
+        // symptom of reading during a plugin/syncthing write. Even with the
+        // watcher's debounce we can't rule it out across filesystems, so
+        // we treat EOF-mid-parse as a transient state, not a hard error.
+        if e.is_eof() {
+            ManifestLoadError::PartialFile
+        } else {
+            ManifestLoadError::Parse(e)
+        }
+    })?;
 
     // Defense-in-depth: the filename must match the capsule_id inside.
     // Prevents a manifest with id "cap_a" being served at path "cap_b.json".
@@ -116,6 +135,8 @@ pub enum ManifestLoadError {
     Io(std::io::Error),
     #[error("parse: {0}")]
     Parse(serde_json::Error),
+    #[error("partial file: empty or truncated mid-write")]
+    PartialFile,
     #[error("manifest filename is not valid UTF-8")]
     BadFilename,
     #[error("manifest filename `{found}` does not match capsule_id `{expected}`")]
@@ -126,6 +147,24 @@ pub enum ManifestLoadError {
 pub fn capsule_id_from_path(path: &Path) -> Option<CapsuleId> {
     let stem = path.file_stem()?.to_str()?;
     CapsuleId::new(stem).ok()
+}
+
+/// True iff `path`'s filename is a valid capsule manifest: `cap_<suffix>.json`
+/// with a valid CapsuleId suffix. Rejects macOS AppleDouble files (`._*`),
+/// plugin-side atomic-write tempfiles (`cap_x.json.tmp`), editor swap files,
+/// and anything else notify might deliver for a directory we're watching.
+pub fn is_manifest_filename(path: &Path) -> bool {
+    if path.extension().and_then(|e| e.to_str()) != Some("json") {
+        return false;
+    }
+    let Some(stem) = path.file_stem().and_then(|s| s.to_str()) else {
+        return false;
+    };
+    // Early-out for any hidden file; AppleDouble `._foo.json` has stem `._foo`.
+    if stem.starts_with('.') {
+        return false;
+    }
+    CapsuleId::new(stem).is_ok()
 }
 
 /// Path where a manifest with this id should live.

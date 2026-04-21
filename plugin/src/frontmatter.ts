@@ -1,5 +1,9 @@
-import { parseYaml, stringifyYaml } from "obsidian";
+import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
 import { CapsuleStatus, ComputationClass, isValidCapsuleId, Manifest } from "./manifest";
+
+// Note: Obsidian also exports parseYaml/stringifyYaml, which are thin
+// wrappers over the same `yaml` package. Importing the library directly
+// lets this module run under `node --test` without an Obsidian runtime.
 
 export const ZONE_MARKER =
 	"# ═══ Computed Fields (daemon-managed, read-only) ═══";

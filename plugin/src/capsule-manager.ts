@@ -59,15 +59,38 @@ export class CapsuleManager {
 		return path.startsWith(prefix) && path.endsWith(".md");
 	}
 
+	/**
+	 * Write the manifest atomically: emit to `<cid>.json.tmp`, then rename.
+	 * The daemon's watcher filters out `.tmp` paths, so it only ever sees a
+	 * complete file at the final name. Combined with the watcher's per-path
+	 * debounce, this eliminates the empty-file-mid-write warnings observed
+	 * in production (Obsidian adapter writes → Syncthing propagation → fs
+	 * watcher burst).
+	 */
 	private async writeManifestJson(manifest: Manifest): Promise<void> {
 		if (!isValidCapsuleId(manifest.capsule_id)) {
 			throw new Error(`invalid capsule_id: ${manifest.capsule_id}`);
 		}
 		const dir = normalizePath(".capsule/manifests");
 		await this.ensureDir(dir);
-		const path = normalizePath(`${dir}/${manifest.capsule_id}.json`);
+		const finalPath = normalizePath(`${dir}/${manifest.capsule_id}.json`);
+		const tmpPath = `${finalPath}.tmp`;
 		const body = JSON.stringify(manifest, null, 2) + "\n";
-		await this.app.vault.adapter.write(path, body);
+		const adapter = this.app.vault.adapter;
+
+		// Clean up any stale tempfile from a crashed previous write.
+		if (await adapter.exists(tmpPath)) {
+			await adapter.remove(tmpPath);
+		}
+		await adapter.write(tmpPath, body);
+
+		// Obsidian's adapter.rename does not guarantee "replace existing"
+		// across platforms; remove first, then rename. The watcher's debounce
+		// coalesces the remove + rename into a single registry update.
+		if (await adapter.exists(finalPath)) {
+			await adapter.remove(finalPath);
+		}
+		await adapter.rename(tmpPath, finalPath);
 	}
 
 	private async ensureDir(path: string): Promise<void> {
