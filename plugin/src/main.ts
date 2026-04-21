@@ -1,6 +1,7 @@
 import { debounce, Notice, Plugin, TAbstractFile, TFile } from "obsidian";
 import { CapsuleManager } from "./capsule-manager";
 import { DaemonBridge } from "./daemon-bridge";
+import { CapsuleDecorator } from "./decorator";
 import { FrontmatterError } from "./frontmatter";
 import { CapsuleNodeSettings, CapsuleNodeSettingTab, DEFAULT_SETTINGS } from "./settings";
 
@@ -10,11 +11,14 @@ export default class CapsuleNodePlugin extends Plugin {
 	settings!: CapsuleNodeSettings;
 	bridge!: DaemonBridge;
 	capsules!: CapsuleManager;
+	decorator!: CapsuleDecorator;
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
 		this.bridge = new DaemonBridge(this.settings.daemonPort);
 		this.capsules = new CapsuleManager(this.app, () => this.settings.capsuleFolder);
+		this.decorator = new CapsuleDecorator(this, this.app, () => this.settings.capsuleFolder);
+		this.decorator.register();
 
 		this.addRibbonIcon("plug-zap", "Check Capsule daemon status", () => {
 			void this.checkDaemonStatus();

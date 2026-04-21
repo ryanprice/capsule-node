@@ -1,0 +1,38 @@
+/* Capsule Node plugin styles.
+ * Obsidian auto-loads styles.css sibling to main.js. */
+
+.capsule-status-bar {
+	font-variant-numeric: tabular-nums;
+	opacity: 0.9;
+}
+
+.capsule-status-banner {
+	display: inline-block;
+	margin: 0 0 1em 0;
+	padding: 0.25em 0.75em;
+	border-radius: 999px;
+	font-size: 0.85em;
+	font-weight: 500;
+	letter-spacing: 0.02em;
+	border: 1px solid var(--background-modifier-border);
+	background: var(--background-secondary);
+}
+
+.capsule-status-active {
+	color: var(--color-green);
+	border-color: var(--color-green);
+}
+
+.capsule-status-paused {
+	color: var(--color-orange);
+	border-color: var(--color-orange);
+}
+
+.capsule-status-draft {
+	color: var(--text-muted);
+}
+
+.capsule-status-archived {
+	color: var(--text-faint);
+	text-decoration: line-through;
+}

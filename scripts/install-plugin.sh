@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Copy the built plugin (main.js + manifest.json) into the Obsidian vault's
-# plugins directory. Run after `npm run build` in plugin/.
+# Copy the built plugin (main.js + manifest.json + styles.css if present) into
+# the Obsidian vault's plugins directory. Run after `npm run build` in plugin/.
 #
 # Reads CAPSULE_VAULT_PATH from .env at the repo root.
 set -euo pipefail
@@ -38,6 +38,9 @@ fi
 
 cp "$SRC/manifest.json" "$DEST/manifest.json"
 cp "$SRC/main.js" "$DEST/main.js"
+if [[ -f "$SRC/styles.css" ]]; then
+  cp "$SRC/styles.css" "$DEST/styles.css"
+fi
 
 echo "installed plugin → $DEST"
 ls -la "$DEST"
