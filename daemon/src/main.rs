@@ -8,7 +8,9 @@ use tracing_subscriber::EnvFilter;
 
 use capsuled::config::Config;
 use capsuled::error::DaemonError;
+use capsuled::registry::{self, Registry};
 use capsuled::server::AppState;
+use capsuled::watcher;
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -24,6 +26,12 @@ async fn main() -> anyhow::Result<()> {
 
     let capsule_dir = capsuled::prepare_vault(&config.vault_path)?;
     info!(path = %capsule_dir.display(), "vault ready");
+
+    let capsule_registry = Registry::new();
+    registry::load_from_disk(&capsule_registry, &capsule_dir)
+        .context("loading manifests from disk")?;
+    let _watcher_handle = watcher::spawn(&capsule_dir, capsule_registry.clone())
+        .context("starting filesystem watcher")?;
 
     let mgmt_addr = SocketAddr::from((Ipv4Addr::LOCALHOST, config.daemon_port));
     let public_addr = SocketAddr::from(([0, 0, 0, 0], config.external_port));
@@ -47,7 +55,11 @@ async fn main() -> anyhow::Result<()> {
     info!(addr = %mgmt_addr, "management API listening (loopback only)");
     info!(addr = %public_addr, "public API listening");
 
-    let state = AppState::new(config.vault_path.clone());
+    let state = AppState::new(
+        config.vault_path.clone(),
+        capsule_dir.clone(),
+        capsule_registry,
+    );
 
     capsuled::serve(mgmt_listener, public_listener, state, shutdown_signal())
         .await

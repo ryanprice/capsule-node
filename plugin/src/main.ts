@@ -1,14 +1,17 @@
 import { Notice, Plugin } from "obsidian";
+import { CapsuleManager } from "./capsule-manager";
 import { DaemonBridge } from "./daemon-bridge";
 import { CapsuleNodeSettings, CapsuleNodeSettingTab, DEFAULT_SETTINGS } from "./settings";
 
 export default class CapsuleNodePlugin extends Plugin {
 	settings!: CapsuleNodeSettings;
 	bridge!: DaemonBridge;
+	capsules!: CapsuleManager;
 
 	async onload(): Promise<void> {
 		await this.loadSettings();
 		this.bridge = new DaemonBridge(this.settings.daemonPort);
+		this.capsules = new CapsuleManager(this.app);
 
 		this.addRibbonIcon("plug-zap", "Check Capsule daemon status", () => {
 			void this.checkDaemonStatus();
@@ -19,6 +22,14 @@ export default class CapsuleNodePlugin extends Plugin {
 			name: "Check daemon status",
 			callback: () => {
 				void this.checkDaemonStatus();
+			},
+		});
+
+		this.addCommand({
+			id: "create-draft-capsule",
+			name: "Create draft capsule",
+			callback: () => {
+				void this.createDraftCapsule();
 			},
 		});
 
@@ -44,6 +55,18 @@ export default class CapsuleNodePlugin extends Plugin {
 			new Notice(`Capsule daemon v${version} — up ${formatUptime(uptime_seconds)}`);
 		} else {
 			new Notice(`Capsule daemon unavailable (${result.reason})`);
+		}
+	}
+
+	private async createDraftCapsule(): Promise<void> {
+		try {
+			const manifest = await this.capsules.createDraftCapsule();
+			new Notice(
+				`Created draft capsule ${manifest.capsule_id}. It will show up in /v1/capsules once you switch status to active.`
+			);
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			new Notice(`Failed to create capsule: ${message}`);
 		}
 	}
 }

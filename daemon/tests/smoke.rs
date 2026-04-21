@@ -1,6 +1,7 @@
 use std::net::{Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 
+use capsuled::registry::Registry;
 use capsuled::server::AppState;
 use tokio::net::TcpListener;
 use tokio::sync::oneshot;
@@ -15,7 +16,9 @@ async fn bind_ephemeral_on(ip: [u8; 4]) -> (TcpListener, SocketAddr) {
 #[tokio::test]
 async fn endpoints_respond_on_both_surfaces() {
     let tempdir = tempdir();
-    let state = AppState::new(tempdir.clone());
+    let capsule_dir = tempdir.join(".capsule");
+    std::fs::create_dir_all(&capsule_dir).unwrap();
+    let state = AppState::new(tempdir.clone(), capsule_dir, Registry::new());
 
     let (mgmt_listener, mgmt_addr) = bind_ephemeral_on([127, 0, 0, 1]).await;
     let (public_listener, public_addr) = bind_ephemeral_on([127, 0, 0, 1]).await;

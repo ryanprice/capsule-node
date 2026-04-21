@@ -1,6 +1,9 @@
 pub mod config;
 pub mod error;
+pub mod manifest;
+pub mod registry;
 pub mod server;
+pub mod watcher;
 
 use std::future::Future;
 
