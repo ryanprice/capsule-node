@@ -79,8 +79,10 @@ pub enum ComputationClass {
 }
 
 /// Machine-readable manifest written to `.capsule/manifests/{capsule_id}.json`.
-/// Spec §2.1. Minimal shape for Phase 1 Foundation slice 1 — credentials,
-/// policy links, temporal range, and computed earnings fields are deferred.
+/// Spec §2.1. The daemon-managed fields below the split are the mirror of the
+/// "Computed Fields" zone in a capsule note's frontmatter: the plugin never
+/// writes them, the daemon updates them from its own ledgers, and the plugin
+/// reflects them back into the note so the user sees current numbers.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Manifest {
     pub capsule_id: CapsuleId,
@@ -90,6 +92,16 @@ pub struct Manifest {
     pub computation_classes: Vec<ComputationClass>,
     #[serde(default)]
     pub tags: Vec<String>,
+
+    // ─── Daemon-managed (owned by the serving layer, read-only to the plugin) ───
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub payload_cid: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub earnings_total: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub queries_served: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_accessed: Option<String>,
 }
 
 #[cfg(test)]
@@ -150,12 +162,56 @@ mod tests {
             floor_price: "0.08 USDC/query".into(),
             computation_classes: vec![ComputationClass::A, ComputationClass::B],
             tags: vec!["glucose".into(), "cgm".into()],
+            payload_cid: None,
+            earnings_total: None,
+            queries_served: None,
+            last_accessed: None,
         };
         let json = serde_json::to_string(&m).unwrap();
         let parsed: Manifest = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.capsule_id, m.capsule_id);
         assert_eq!(parsed.status, m.status);
         assert_eq!(parsed.computation_classes, m.computation_classes);
+    }
+
+    /// Slice-1 manifests (no daemon-managed fields at all) must still parse
+    /// cleanly after slice 2 added the optional fields. Default → None.
+    #[test]
+    fn manifest_backward_compat_slice1() {
+        let json = r#"{
+            "capsule_id": "cap_8f3a2b",
+            "schema": "capsule://draft",
+            "status": "draft",
+            "floor_price": "0.01 USDC/query",
+            "computation_classes": ["A"],
+            "tags": []
+        }"#;
+        let parsed: Manifest = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.payload_cid, None);
+        assert_eq!(parsed.earnings_total, None);
+        assert_eq!(parsed.queries_served, None);
+        assert_eq!(parsed.last_accessed, None);
+    }
+
+    /// With daemon-managed fields present, they round-trip.
+    #[test]
+    fn manifest_roundtrip_with_daemon_fields() {
+        let m = Manifest {
+            capsule_id: CapsuleId::new("cap_8f3a2b").unwrap(),
+            schema: "capsule://x".into(),
+            status: CapsuleStatus::Active,
+            floor_price: "0.01".into(),
+            computation_classes: vec![ComputationClass::A],
+            tags: vec![],
+            payload_cid: Some("bafy...".into()),
+            earnings_total: Some("12.34 USDC".into()),
+            queries_served: Some(42),
+            last_accessed: Some("2026-04-20T12:00:00Z".into()),
+        };
+        let json = serde_json::to_string(&m).unwrap();
+        let parsed: Manifest = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.payload_cid.as_deref(), Some("bafy..."));
+        assert_eq!(parsed.queries_served, Some(42));
     }
 
     #[test]

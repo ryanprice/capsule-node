@@ -3,10 +3,12 @@ import type CapsuleNodePlugin from "./main";
 
 export interface CapsuleNodeSettings {
 	daemonPort: number;
+	capsuleFolder: string;
 }
 
 export const DEFAULT_SETTINGS: CapsuleNodeSettings = {
 	daemonPort: 7402,
+	capsuleFolder: "Capsules",
 };
 
 export class CapsuleNodeSettingTab extends PluginSettingTab {
@@ -34,6 +36,20 @@ export class CapsuleNodeSettingTab extends PluginSettingTab {
 							this.plugin.bridge.setPort(parsed);
 							await this.plugin.saveSettings();
 						}
+					})
+			);
+
+		new Setting(containerEl)
+			.setName("Capsule folder")
+			.setDesc("Folder inside the vault where capsule notes live.")
+			.addText((text) =>
+				text
+					.setPlaceholder("Capsules")
+					.setValue(this.plugin.settings.capsuleFolder)
+					.onChange(async (value) => {
+						const trimmed = value.trim().replace(/\/+$/, "");
+						this.plugin.settings.capsuleFolder = trimmed || "Capsules";
+						await this.plugin.saveSettings();
 					})
 			);
 

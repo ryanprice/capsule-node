@@ -1,7 +1,10 @@
-import { Notice, Plugin } from "obsidian";
+import { debounce, Notice, Plugin, TAbstractFile, TFile } from "obsidian";
 import { CapsuleManager } from "./capsule-manager";
 import { DaemonBridge } from "./daemon-bridge";
+import { FrontmatterError } from "./frontmatter";
 import { CapsuleNodeSettings, CapsuleNodeSettingTab, DEFAULT_SETTINGS } from "./settings";
+
+const SYNC_DEBOUNCE_MS = 400;
 
 export default class CapsuleNodePlugin extends Plugin {
 	settings!: CapsuleNodeSettings;
@@ -11,7 +14,7 @@ export default class CapsuleNodePlugin extends Plugin {
 	async onload(): Promise<void> {
 		await this.loadSettings();
 		this.bridge = new DaemonBridge(this.settings.daemonPort);
-		this.capsules = new CapsuleManager(this.app);
+		this.capsules = new CapsuleManager(this.app, () => this.settings.capsuleFolder);
 
 		this.addRibbonIcon("plug-zap", "Check Capsule daemon status", () => {
 			void this.checkDaemonStatus();
@@ -32,6 +35,22 @@ export default class CapsuleNodePlugin extends Plugin {
 				void this.createDraftCapsule();
 			},
 		});
+
+		const debouncedSync = debounce(
+			(file: TFile) => {
+				void this.syncNoteToManifest(file);
+			},
+			SYNC_DEBOUNCE_MS,
+			true,
+		);
+
+		this.registerEvent(
+			this.app.vault.on("modify", (file: TAbstractFile) => {
+				if (!(file instanceof TFile)) return;
+				if (!this.capsules.isCapsuleNotePath(file.path)) return;
+				debouncedSync(file);
+			}),
+		);
 
 		this.addSettingTab(new CapsuleNodeSettingTab(this.app, this));
 	}
@@ -60,13 +79,34 @@ export default class CapsuleNodePlugin extends Plugin {
 
 	private async createDraftCapsule(): Promise<void> {
 		try {
-			const manifest = await this.capsules.createDraftCapsule();
+			const { file, manifest } = await this.capsules.createDraftCapsule();
+			await this.app.workspace.getLeaf(true).openFile(file);
 			new Notice(
-				`Created draft capsule ${manifest.capsule_id}. It will show up in /v1/capsules once you switch status to active.`
+				`Created draft capsule ${manifest.capsule_id}. Edit the note, then flip status to active.`
 			);
 		} catch (err) {
 			const message = err instanceof Error ? err.message : String(err);
 			new Notice(`Failed to create capsule: ${message}`);
+		}
+	}
+
+	private async syncNoteToManifest(file: TFile): Promise<void> {
+		try {
+			await this.capsules.syncNoteToManifest(file);
+		} catch (err) {
+			// User is mid-edit — don't pop a Notice on every keystroke's worth
+			// of broken YAML. Console-only; they'll see Notices when they use
+			// a command explicitly.
+			if (err instanceof FrontmatterError) {
+				console.warn(
+					`Capsule note ${file.path} could not be parsed: ${err.message}`,
+				);
+				return;
+			}
+			console.error(
+				`Failed to sync capsule note ${file.path} to manifest:`,
+				err,
+			);
 		}
 	}
 }

@@ -148,6 +148,10 @@ mod tests {
             floor_price: "0.01".into(),
             computation_classes: vec![ComputationClass::A],
             tags: vec![],
+            payload_cid: None,
+            earnings_total: None,
+            queries_served: None,
+            last_accessed: None,
         }
     }
 
