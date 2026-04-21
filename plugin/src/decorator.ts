@@ -103,29 +103,33 @@ export class CapsuleDecorator {
 		if (!isCapsuleNotePath(ctx.sourcePath, this.capsuleFolder())) {
 			return;
 		}
-		// The post-processor runs per-section. The container is shared across
-		// all sections of the same rendered note, so prepending once is enough.
-		const sizer = el.closest<HTMLElement>(".markdown-preview-sizer");
-		if (!sizer) return;
+		// Obsidian's post-processor runs BEFORE `el` is attached to its
+		// parent sizer in many render paths. `el.closest(".markdown-preview-
+		// sizer")` returns null at that moment, silently skipping the
+		// decoration. Defer to the next frame when `el` is attached.
+		requestAnimationFrame(() => {
+			const sizer = el.closest<HTMLElement>(".markdown-preview-sizer");
+			if (!sizer) return;
 
-		const file = this.app.vault.getFileByPath(ctx.sourcePath);
-		if (!file) return;
-		const fm = this.app.metadataCache.getFileCache(file)?.frontmatter;
-		const status = statusFromFrontmatter(
-			fm as Record<string, unknown> | undefined,
-		);
+			// ctx.frontmatter is populated by Obsidian; prefer it over a
+			// metadataCache lookup (faster, always consistent with the
+			// render that just happened).
+			const status = statusFromFrontmatter(
+				ctx.frontmatter as Record<string, unknown> | null | undefined,
+			);
 
-		const existing = sizer.querySelector(`:scope > .${BANNER_CLASS}`);
-		if (!status) {
-			existing?.remove();
-			return;
-		}
-		const banner = buildBanner(status);
-		if (existing) {
-			existing.replaceWith(banner);
-		} else {
-			sizer.prepend(banner);
-		}
+			const existing = sizer.querySelector(`:scope > .${BANNER_CLASS}`);
+			if (!status) {
+				existing?.remove();
+				return;
+			}
+			const banner = buildBanner(status);
+			if (existing) {
+				existing.replaceWith(banner);
+			} else {
+				sizer.prepend(banner);
+			}
+		});
 	}
 }
 
