@@ -100,23 +100,29 @@ export class CapsuleDecorator {
 		el: HTMLElement,
 		ctx: MarkdownPostProcessorContext,
 	): void {
-		if (!isCapsuleNotePath(ctx.sourcePath, this.capsuleFolder())) {
-			return;
-		}
-		// Obsidian's post-processor runs BEFORE `el` is attached to its
-		// parent sizer in many render paths. `el.closest(".markdown-preview-
-		// sizer")` returns null at that moment, silently skipping the
-		// decoration. Defer to the next frame when `el` is attached.
+		const isCapsule = isCapsuleNotePath(ctx.sourcePath, this.capsuleFolder());
+		console.log("[capsule] post-processor fired", {
+			sourcePath: ctx.sourcePath,
+			capsuleFolder: this.capsuleFolder(),
+			isCapsule,
+			hasFrontmatter: !!ctx.frontmatter,
+			status: (ctx.frontmatter as Record<string, unknown> | undefined)?.status,
+		});
+		if (!isCapsule) return;
+
 		requestAnimationFrame(() => {
 			const sizer = el.closest<HTMLElement>(".markdown-preview-sizer");
+			console.log("[capsule] rAF fired", {
+				elAttached: el.isConnected,
+				sizerViaClosest: !!sizer,
+				elParent: el.parentElement?.className,
+			});
 			if (!sizer) return;
 
-			// ctx.frontmatter is populated by Obsidian; prefer it over a
-			// metadataCache lookup (faster, always consistent with the
-			// render that just happened).
 			const status = statusFromFrontmatter(
 				ctx.frontmatter as Record<string, unknown> | null | undefined,
 			);
+			console.log("[capsule] status resolved", status);
 
 			const existing = sizer.querySelector(`:scope > .${BANNER_CLASS}`);
 			if (!status) {
