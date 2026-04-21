@@ -1,38 +1,64 @@
 /* Capsule Node plugin styles.
  * Obsidian auto-loads styles.css sibling to main.js. */
 
+/* ── Status bar item ─────────────────────────────────────────────── */
 .capsule-status-bar {
 	font-variant-numeric: tabular-nums;
 	opacity: 0.9;
 }
 
-.capsule-status-banner {
-	display: inline-block;
+.capsule-status-bar.capsule-status-active {
+	color: var(--color-green);
+}
+.capsule-status-bar.capsule-status-paused {
+	color: var(--color-orange);
+}
+.capsule-status-bar.capsule-status-draft {
+	color: var(--text-muted);
+}
+.capsule-status-bar.capsule-status-archived {
+	color: var(--text-faint);
+	text-decoration: line-through;
+}
+
+/* ── In-note pill (reading view) ─────────────────────────────────── */
+/* Rendered via CSS pseudo-element on the markdown sizer — not a DOM
+ * element we inject — so Obsidian's section-level re-renders can't wipe
+ * it. The capsule-status-<status> class is placed on MarkdownView.contentEl
+ * by the decorator; the descendant sizer selector matches only in reading
+ * view, where .markdown-preview-sizer exists. */
+.capsule-status-active .markdown-preview-sizer::before,
+.capsule-status-paused .markdown-preview-sizer::before,
+.capsule-status-draft .markdown-preview-sizer::before,
+.capsule-status-archived .markdown-preview-sizer::before {
+	display: block;
+	width: fit-content;
 	margin: 0 0 1em 0;
 	padding: 0.25em 0.75em;
 	border-radius: 999px;
 	font-size: 0.85em;
 	font-weight: 500;
 	letter-spacing: 0.02em;
-	border: 1px solid var(--background-modifier-border);
 	background: var(--background-secondary);
+	border: 1px solid var(--background-modifier-border);
 }
 
-.capsule-status-active {
+.capsule-status-active .markdown-preview-sizer::before {
+	content: "● capsule · active";
 	color: var(--color-green);
 	border-color: var(--color-green);
 }
-
-.capsule-status-paused {
+.capsule-status-paused .markdown-preview-sizer::before {
+	content: "◌ capsule · paused";
 	color: var(--color-orange);
 	border-color: var(--color-orange);
 }
-
-.capsule-status-draft {
+.capsule-status-draft .markdown-preview-sizer::before {
+	content: "○ capsule · draft";
 	color: var(--text-muted);
 }
-
-.capsule-status-archived {
+.capsule-status-archived .markdown-preview-sizer::before {
+	content: "✕ capsule · archived";
 	color: var(--text-faint);
 	text-decoration: line-through;
 }
