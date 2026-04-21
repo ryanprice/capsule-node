@@ -1,0 +1,69 @@
+# ─── Secrets & environment ─────────────────────────────────────────
+# Never commit real env files. Only .env.example is tracked.
+.env
+.env.local
+.env.*.local
+!.env.example
+
+# ─── Key material (defense-in-depth — none of this should ever exist in-repo) ──
+*.key
+*.pem
+*.p12
+*.pfx
+*.keystore
+*.seed
+*.mnemonic
+keyring
+keyring.*
+id_rsa
+id_ed25519
+wallet.json
+*.wallet
+
+# Anything that looks like vault identity state
+identity/
+credentials/
+
+# ─── Vault / runtime state ─────────────────────────────────────────
+# A user's vault must never end up inside this repo. If someone copies
+# a vault in for testing, these patterns keep the runtime state out of git.
+.capsule/
+payloads/
+activity/
+*.enc
+
+# ─── Rust (daemon) ─────────────────────────────────────────────────
+/target/
+**/target/
+**/*.rs.bk
+# Note: Cargo.lock IS committed for binary crates (capsuled is a binary).
+
+# ─── Node / TypeScript (Obsidian plugin) ───────────────────────────
+node_modules/
+dist/
+build/
+*.tsbuildinfo
+.npm
+.yarn/
+.pnp.*
+coverage/
+
+# Obsidian plugin build outputs (main.js is generated from src/)
+main.js
+main.js.map
+data.json
+
+# ─── OS / editor ───────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# ─── Logs ──────────────────────────────────────────────────────────
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*

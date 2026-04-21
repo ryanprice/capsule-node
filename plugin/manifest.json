@@ -1,0 +1,10 @@
+{
+	"id": "capsule-node",
+	"name": "Capsule Node",
+	"version": "0.1.0",
+	"minAppVersion": "1.5.0",
+	"description": "Human interface for the Capsule Node. Manages capsule notes and communicates with the companion daemon.",
+	"author": "Ryan Price",
+	"authorUrl": "https://github.com/ryanprice/capsule-node",
+	"isDesktopOnly": true
+}
