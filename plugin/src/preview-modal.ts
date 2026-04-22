@@ -3,6 +3,7 @@ import {
 	ExtractionError,
 	ExtractionResult,
 	extract,
+	needsContent,
 	parseSourceRef,
 	ResolvedSource,
 } from "./extraction";
@@ -15,8 +16,9 @@ const MAX_RECORDS_SHOWN = 20;
  *
  * Never writes to disk, never talks to the daemon, never encrypts. The
  * whole point is to answer "what am I actually about to share?" before a
- * user flips a capsule to `active`. Everything is read through Obsidian's
- * metadata cache; no vault.read() required for frontmatter-list mode.
+ * user flips a capsule to `active`. For frontmatter-list mode we read
+ * from Obsidian's metadata cache only; for table and code-fence modes
+ * we vault.read each source once.
  */
 export class PreviewCapsuleDataModal extends Modal {
 	constructor(
@@ -47,58 +49,79 @@ export class PreviewCapsuleDataModal extends Modal {
 
 		const mode = this.manifest.extraction ?? "none";
 		if (mode === "none") {
-			// The common trip-up: user added sources via the Properties panel,
-			// but the capsule was created before `extraction` had a sensible
-			// default. Tell them exactly what to do rather than silently
-			// showing "0 records".
-			const hint = contentEl.createEl("p");
-			hint.appendText("This capsule has ");
-			hint.createEl("strong", { text: `${sources.length} source${sources.length === 1 ? "" : "s"}` });
-			hint.appendText(" but ");
-			hint.createEl("code", { text: "extraction: none" });
-			hint.appendText(
-				" — no records will be produced. Add a property named ",
-			);
-			hint.createEl("code", { text: "extraction" });
-			hint.appendText(" with value ");
-			hint.createEl("code", { text: "frontmatter-list" });
-			hint.appendText(' to the capsule note, then re-run "Preview capsule data".');
+			this.renderNoneHint(sources.length);
 			this.addCloseButton();
 			return;
 		}
 
-		const resolved = sources.map((raw) => this.resolveSource(raw));
-		const result = extract(resolved, mode);
-
-		this.renderSummary(contentEl, result, sources.length);
-		if (result.errors.length > 0) {
-			this.renderErrors(contentEl, result.errors);
-		}
-		if (result.records.length > 0) {
-			this.renderRecords(contentEl, result.records);
-		}
-		this.addCloseButton();
+		// Table + code-fence require reading each source's full body —
+		// that's async. Show a placeholder synchronously, then replace
+		// when the resolve+extract pass finishes.
+		const status = contentEl.createEl("p", { text: "Loading…" });
+		void this.runExtraction(sources).then((result) => {
+			status.remove();
+			this.renderSummary(contentEl, result, sources.length);
+			if (result.errors.length > 0) this.renderErrors(contentEl, result.errors);
+			if (result.records.length > 0) this.renderRecords(contentEl, result.records);
+			this.addCloseButton();
+		});
 	}
 
 	onClose(): void {
 		this.contentEl.empty();
 	}
 
-	private resolveSource(raw: string): ResolvedSource {
+	private async runExtraction(sources: string[]): Promise<ExtractionResult> {
+		const mode = this.manifest.extraction ?? "none";
+		const withContent = needsContent(mode);
+		const resolved = await Promise.all(
+			sources.map((raw) => this.resolveSource(raw, withContent)),
+		);
+		return extract(resolved, mode);
+	}
+
+	private async resolveSource(
+		raw: string,
+		readContent: boolean,
+	): Promise<ResolvedSource> {
 		const linkpath = parseSourceRef(raw);
 		const file = this.app.metadataCache.getFirstLinkpathDest(
 			linkpath,
 			this.capsuleFile.path,
 		);
 		if (!file) {
-			return { rawRef: raw, path: linkpath, frontmatter: null };
+			return { rawRef: raw, path: linkpath, frontmatter: null, content: null };
 		}
 		const cache = this.app.metadataCache.getFileCache(file);
-		return {
-			rawRef: raw,
-			path: file.path,
-			frontmatter: (cache?.frontmatter ?? null) as Record<string, unknown> | null,
-		};
+		const frontmatter =
+			(cache?.frontmatter ?? null) as Record<string, unknown> | null;
+		const content = readContent ? await this.app.vault.read(file) : null;
+		return { rawRef: raw, path: file.path, frontmatter, content };
+	}
+
+	private renderNoneHint(sourceCount: number): void {
+		// The common trip-up: user added sources via the Properties panel,
+		// but the capsule was created before `extraction` had a sensible
+		// default. Tell them exactly what to do rather than silently
+		// showing "0 records".
+		const hint = this.contentEl.createEl("p");
+		hint.appendText("This capsule has ");
+		hint.createEl("strong", {
+			text: `${sourceCount} source${sourceCount === 1 ? "" : "s"}`,
+		});
+		hint.appendText(" but ");
+		hint.createEl("code", { text: "extraction: none" });
+		hint.appendText(
+			" — no records will be produced. Set the ",
+		);
+		hint.createEl("code", { text: "extraction" });
+		hint.appendText(" property to one of ");
+		hint.createEl("code", { text: "frontmatter-list" });
+		hint.appendText(", ");
+		hint.createEl("code", { text: "table" });
+		hint.appendText(", or ");
+		hint.createEl("code", { text: "code-fence" });
+		hint.appendText(' and re-run "Preview capsule data".');
 	}
 
 	private renderSummary(
@@ -140,8 +163,9 @@ export class PreviewCapsuleDataModal extends Modal {
 					: `Records (${records.length})`,
 		});
 
-		// Column set is the union of keys in the first N records, stable
-		// across page loads (insertion order preserved).
+		// Column set is the union of keys in the shown records, in first-
+		// seen order (stable across runs since JS object iteration order
+		// is insertion order).
 		const columns: string[] = [];
 		const seen = new Set<string>();
 		const shown = records.slice(0, MAX_RECORDS_SHOWN);

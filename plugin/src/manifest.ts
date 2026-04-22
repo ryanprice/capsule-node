@@ -4,10 +4,22 @@ export type ComputationClass = "A" | "B" | "C";
 /**
  * How the plugin extracts data from the capsule's source notes into
  * schema-typed records. See capsule-node/design/001-data-sharing.md in
- * the vault for the full rationale. Slice 6a ships `frontmatter-list`
- * only; `table` and `code-fence` land in follow-up slices.
+ * the vault for the full rationale.
+ *
+ * Modes:
+ *  * `none`           — no pipeline (default for paused/draft capsules)
+ *  * `frontmatter-list` — each source note's YAML frontmatter is one record
+ *  * `table`          — the first markdown table in each source note is a
+ *                       batch of records (headers → column names)
+ *  * `code-fence`     — every ```capsule-data[:lang]``` block in a source
+ *                       is parsed (lang = json | csv; default json) and
+ *                       its entries concatenated into the record stream
  */
-export type ExtractionMode = "none" | "frontmatter-list";
+export type ExtractionMode =
+	| "none"
+	| "frontmatter-list"
+	| "table"
+	| "code-fence";
 
 export interface Manifest {
 	capsule_id: string;

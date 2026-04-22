@@ -112,9 +112,16 @@ function toComputationClasses(raw: unknown): ComputationClass[] {
 
 function toExtractionMode(raw: unknown): ExtractionMode | undefined {
 	if (raw == null) return undefined;
-	if (raw === "none" || raw === "frontmatter-list") return raw;
+	if (
+		raw === "none" ||
+		raw === "frontmatter-list" ||
+		raw === "table" ||
+		raw === "code-fence"
+	) {
+		return raw;
+	}
 	throw new FrontmatterError(
-		`extraction must be one of: none, frontmatter-list`
+		"extraction must be one of: none, frontmatter-list, table, code-fence",
 	);
 }
 
