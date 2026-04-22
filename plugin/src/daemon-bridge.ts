@@ -8,6 +8,8 @@ export interface DaemonStatus {
 	/** Added in slice 5a. Optional in the type so a newer plugin talking
 	 * to an older daemon still parses the common fields. */
 	keyring?: KeyringState;
+	/** EIP-55 Ethereum address; only present when keyring is "unlocked". */
+	wallet_address?: string;
 }
 
 export type KeyringState = "none" | "locked" | "unlocked";

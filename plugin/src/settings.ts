@@ -54,6 +54,69 @@ export class CapsuleNodeSettingTab extends PluginSettingTab {
 			);
 
 		new Setting(containerEl).setName("Vault path").setDesc(vaultPath(this.app)).setDisabled(true);
+
+		// ── Daemon-reported state ──────────────────────────────────────────
+		// Two read-only rows that pull from the mgmt /api/v1/status endpoint.
+		// Values are fetched async; we seed them with a "Loading…" placeholder
+		// and populate when the request comes back. A Refresh button re-runs
+		// the fetch without reopening the settings tab.
+		containerEl.createEl("h3", { text: "Node identity" });
+
+		const keyringSetting = new Setting(containerEl)
+			.setName("Keyring status")
+			.setDesc("Loading…")
+			.setDisabled(true);
+
+		const walletSetting = new Setting(containerEl)
+			.setName("Wallet address")
+			.setDesc("Loading…")
+			.setDisabled(true);
+
+		new Setting(containerEl).addButton((btn) =>
+			btn
+				.setButtonText("Refresh")
+				.setTooltip("Re-query the daemon for current keyring + wallet state.")
+				.onClick(() => {
+					void this.refreshDaemonState(keyringSetting, walletSetting);
+				}),
+		);
+
+		void this.refreshDaemonState(keyringSetting, walletSetting);
+	}
+
+	private async refreshDaemonState(
+		keyringSetting: Setting,
+		walletSetting: Setting,
+	): Promise<void> {
+		keyringSetting.setDesc("Loading…");
+		walletSetting.setDesc("Loading…");
+
+		const result = await this.plugin.bridge.pingStatus();
+		if (!result.ok) {
+			const message = `Daemon unreachable (${result.reason}).`;
+			keyringSetting.setDesc(message);
+			walletSetting.setDesc(message);
+			return;
+		}
+
+		const keyring = result.data.keyring ?? "unknown";
+		keyringSetting.setDesc(describeKeyring(keyring));
+		walletSetting.setDesc(
+			result.data.wallet_address ?? "No address — unlock the keyring first.",
+		);
+	}
+}
+
+function describeKeyring(state: string): string {
+	switch (state) {
+		case "none":
+			return "None — run \"Capsule Node: Initialize keyring\".";
+		case "locked":
+			return "Locked — run \"Capsule Node: Unlock keyring\".";
+		case "unlocked":
+			return "Unlocked.";
+		default:
+			return `Unknown (${state}).`;
 	}
 }
 

@@ -33,6 +33,9 @@ struct StatusResponse {
     version: &'static str,
     capsule_count: usize,
     keyring: &'static str,
+    /// EIP-55 Ethereum address. Only present when `keyring == "unlocked"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    wallet_address: Option<String>,
 }
 
 async fn status(State(state): State<AppState>) -> Json<StatusResponse> {
@@ -48,6 +51,7 @@ async fn status(State(state): State<AppState>) -> Json<StatusResponse> {
         version: state.version(),
         capsule_count: state.registry().len(),
         keyring: keyring_label,
+        wallet_address: state.wallet_address(),
     })
 }
 
