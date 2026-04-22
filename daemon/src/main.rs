@@ -8,8 +8,9 @@ use tracing_subscriber::EnvFilter;
 
 use capsuled::config::Config;
 use capsuled::error::DaemonError;
+use capsuled::keyring;
 use capsuled::registry::{self, Registry};
-use capsuled::server::AppState;
+use capsuled::server::{AppState, KeyringSlot};
 use capsuled::watcher;
 
 #[tokio::main]
@@ -55,10 +56,14 @@ async fn main() -> anyhow::Result<()> {
     info!(addr = %mgmt_addr, "management API listening (loopback only)");
     info!(addr = %public_addr, "public API listening");
 
+    let keyring_slot = load_keyring_slot(&capsule_dir);
+    info!(state = keyring_slot.status_label(), "keyring initialized");
+
     let state = AppState::new(
         config.vault_path.clone(),
         capsule_dir.clone(),
         capsule_registry,
+        keyring_slot,
     );
 
     capsuled::serve(mgmt_listener, public_listener, state, shutdown_signal())
@@ -80,4 +85,28 @@ fn init_tracing(default_level: &str) {
 async fn shutdown_signal() {
     let _ = tokio::signal::ctrl_c().await;
     info!("shutdown signal received");
+}
+
+/// On boot, inspect `.capsule/identity/keyring.enc`. If present, load it
+/// into a Locked slot; if absent, start in None and let the operator run
+/// `POST /api/v1/keyring/init` to create one. A corrupt or version-
+/// mismatched file logs a warning and falls back to None rather than
+/// aborting startup — the daemon must still be able to serve the mgmt
+/// endpoints so the operator can reset identity.
+fn load_keyring_slot(capsule_dir: &std::path::Path) -> KeyringSlot {
+    let path = keyring::keyring_path(capsule_dir);
+    if !path.exists() {
+        return KeyringSlot::None;
+    }
+    match keyring::load(&path) {
+        Ok(locked) => KeyringSlot::Locked(locked),
+        Err(e) => {
+            tracing::warn!(
+                path = %path.display(),
+                error = %e,
+                "existing keyring file could not be loaded; starting in None state"
+            );
+            KeyringSlot::None
+        }
+    }
 }

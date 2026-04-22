@@ -1,5 +1,6 @@
 pub mod config;
 pub mod error;
+pub mod keyring;
 pub mod manifest;
 pub mod registry;
 pub mod server;

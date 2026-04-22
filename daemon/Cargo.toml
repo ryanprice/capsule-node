@@ -26,6 +26,15 @@ anyhow = "1.0"
 thiserror = "2.0"
 notify = "7.0"
 
+# Crypto — keyring at rest (spec §9.4 security invariants).
+argon2 = "0.5"              # password → KEK via Argon2id
+chacha20poly1305 = "0.10"   # AEAD for the encrypted keyring blob
+zeroize = { version = "1.8", features = ["zeroize_derive"] }
+rand = "0.8"                # OsRng for salt + nonce
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"                # mlock/munlock for in-memory key material
+
 [dev-dependencies]
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 tokio = { version = "1.42", features = ["rt-multi-thread", "macros", "signal", "net", "time"] }
