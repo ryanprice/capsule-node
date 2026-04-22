@@ -29,6 +29,11 @@ struct NodeInfo {
     version: &'static str,
     supported_schemas: Vec<String>,
     capsule_count: usize,
+    /// Ethereum payout address (EIP-55 hex), present only when the node
+    /// keyring is unlocked. Agents use this to verify payments before
+    /// making an x402-gated request.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    wallet_address: Option<String>,
 }
 
 async fn node_info(State(state): State<AppState>) -> Json<NodeInfo> {
@@ -44,6 +49,7 @@ async fn node_info(State(state): State<AppState>) -> Json<NodeInfo> {
         version: state.version(),
         supported_schemas: schemas.into_iter().collect(),
         capsule_count: state.registry().len(),
+        wallet_address: state.wallet_address(),
     })
 }
 
@@ -119,8 +125,12 @@ struct CapsuleQuality {
 
 /// `GET /v1/capsules/{cid}/compute` — no-payment-attached path returns HTTP
 /// 402 with the payment terms the agent must satisfy (spec §5 x402 response).
-/// This is a stub: price is taken from the manifest's floor_price; wallet
-/// address and expiry are deferred until wallet integration lands.
+///
+/// If the keyring is not Unlocked, the daemon has no signing identity and
+/// no trusted recipient address to commit to — we return 503 rather than
+/// offering a 402 the agent cannot trust. This is the fail-closed path
+/// required by CLAUDE.md: post-lock, daemon continues running but refuses
+/// computations until re-auth.
 async fn compute(State(state): State<AppState>, Path(cid): Path<String>) -> impl IntoResponse {
     let id = match CapsuleId::new(&cid) {
         Ok(id) => id,
@@ -137,6 +147,16 @@ async fn compute(State(state): State<AppState>, Path(cid): Path<String>) -> impl
             .into_response();
     }
 
+    let Some(recipient) = state.wallet_address() else {
+        return (
+            StatusCode::SERVICE_UNAVAILABLE,
+            Json(serde_json::json!({
+                "error": "node keyring is not unlocked; no recipient address available",
+            })),
+        )
+            .into_response();
+    };
+
     let body = PaymentRequired {
         capsule_cid: manifest.capsule_id.as_str().to_string(),
         price: PaymentPrice {
@@ -144,8 +164,8 @@ async fn compute(State(state): State<AppState>, Path(cid): Path<String>) -> impl
             currency: "USDC",
             network: "eip155:8453",
         },
-        recipient: None,
-        expiry: None,
+        recipient: Some(recipient),
+        expiry: Some(payment_expiry_rfc3339()),
         supported_schemes: vec!["exact"],
         capsule_quality: CapsuleQuality {
             status: manifest.status,
@@ -153,6 +173,20 @@ async fn compute(State(state): State<AppState>, Path(cid): Path<String>) -> impl
         },
     };
     (StatusCode::PAYMENT_REQUIRED, Json(body)).into_response()
+}
+
+/// 5-minute window for the agent to actually submit payment against the
+/// terms we just quoted. Long enough to be user-friendly over slow
+/// connections; short enough that stale quotes don't outlive real price
+/// drift once the daemon starts honoring payment-required headers.
+const PAYMENT_EXPIRY_SECS: i64 = 300;
+
+fn payment_expiry_rfc3339() -> String {
+    let now = time::OffsetDateTime::now_utc();
+    let expiry = now + time::Duration::seconds(PAYMENT_EXPIRY_SECS);
+    expiry
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_else(|_| now.unix_timestamp().to_string())
 }
 
 /// Extract a numeric amount from a free-form `floor_price` like

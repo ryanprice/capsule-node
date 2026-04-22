@@ -95,12 +95,20 @@ pub struct LockedKeyring {
 /// can mlock a stable address; auto-zeroized on drop). Length is pinned
 /// at MASTER_SECRET_LEN at construction and never mutated, so the
 /// slice→[u8; 32] conversion in `with_secret` is infallible.
+///
+/// The derived Ethereum payout address is computed once at construction
+/// and cached. It's a public value (anyone can see it on-chain once we
+/// receive a payment to it), so storing it in plaintext is fine.
 pub struct UnlockedKeyring {
     secret: Zeroizing<Vec<u8>>,
     /// True if mlock succeeded at construction. Drop only calls munlock
     /// when locking succeeded; otherwise we'd pass a non-locked pointer
     /// and the kernel would return an error we'd swallow anyway.
     mlocked: bool,
+    /// EIP-55 hex Ethereum address derived from `secret` under the
+    /// base-usdc domain. Stored eagerly so request handlers don't
+    /// re-run HKDF + secp256k1 per call.
+    wallet_address: String,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -154,6 +162,8 @@ pub enum KeyringError {
     Mlock(std::io::Error),
     #[error("passphrase must not be empty")]
     EmptyPassphrase,
+    #[error("wallet derivation failed: {0}")]
+    WalletDerive(String),
 }
 
 /// Create a fresh keyring at `path`. Fails if the file already exists.
@@ -281,15 +291,23 @@ impl LockedKeyring {
 impl UnlockedKeyring {
     fn from_bytes(mut secret: [u8; MASTER_SECRET_LEN]) -> Result<Self, KeyringError> {
         // Copy the bytes into a heap Vec so we have a stable address
-        // for mlock, and can zeroize the input array afterwards.
+        // for mlock.
         let mut vec = vec![0u8; MASTER_SECRET_LEN];
         vec.copy_from_slice(&secret);
+        let mlocked = lock_memory(vec.as_ptr(), MASTER_SECRET_LEN)?;
+
+        // Derive the public wallet address once, while the input array
+        // is still live, so we don't have to call back through
+        // `with_secret` later just to recompute this.
+        let wallet_address =
+            crate::wallet::derive_ethereum_address(&secret, crate::wallet::DOMAIN_BASE_USDC_V1)
+                .map_err(|e| KeyringError::WalletDerive(e.to_string()))?;
         secret.zeroize();
-        let secret_vec = Zeroizing::new(vec);
-        let mlocked = lock_memory(secret_vec.as_ptr(), MASTER_SECRET_LEN)?;
+
         Ok(Self {
-            secret: secret_vec,
+            secret: Zeroizing::new(vec),
             mlocked,
+            wallet_address,
         })
     }
 
@@ -302,6 +320,13 @@ impl UnlockedKeyring {
             .try_into()
             .expect("master secret length pinned to MASTER_SECRET_LEN at construction");
         f(arr)
+    }
+
+    /// EIP-55 hex Ethereum payout address, derived from this keyring's
+    /// master secret under the base-usdc domain label. Public value —
+    /// safe to log or surface in API responses.
+    pub fn wallet_address(&self) -> &str {
+        &self.wallet_address
     }
 
     #[cfg(test)]

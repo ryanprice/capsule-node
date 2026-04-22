@@ -92,4 +92,16 @@ impl AppState {
     pub fn keyring(&self) -> &Arc<RwLock<KeyringSlot>> {
         &self.inner.keyring
     }
+
+    /// Current node payout address, as an EIP-55 Ethereum address.
+    /// Returns `None` when the keyring is not Unlocked — public
+    /// endpoints reflect this by omitting or nulling the `recipient`
+    /// field in responses.
+    pub fn wallet_address(&self) -> Option<String> {
+        let slot = self.inner.keyring.read().ok()?;
+        match &*slot {
+            KeyringSlot::Unlocked(unlocked) => Some(unlocked.wallet_address().to_string()),
+            _ => None,
+        }
+    }
 }

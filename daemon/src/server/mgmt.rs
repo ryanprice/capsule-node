@@ -216,7 +216,10 @@ fn keyring_error_response(e: KeyringError) -> axum::response::Response {
             StatusCode::INTERNAL_SERVER_ERROR,
             "keyring file is corrupted or from an unsupported version",
         ),
-        KeyringError::Io(_) | KeyringError::KdfParams(_) | KeyringError::KdfRun(_) => {
+        KeyringError::Io(_)
+        | KeyringError::KdfParams(_)
+        | KeyringError::KdfRun(_)
+        | KeyringError::WalletDerive(_) => {
             tracing::error!(error = %e, "keyring internal error");
             err_response(StatusCode::INTERNAL_SERVER_ERROR, "internal keyring error")
         }

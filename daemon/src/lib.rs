@@ -4,6 +4,7 @@ pub mod keyring;
 pub mod manifest;
 pub mod registry;
 pub mod server;
+pub mod wallet;
 pub mod watcher;
 
 use std::future::Future;
