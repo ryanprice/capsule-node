@@ -1,6 +1,14 @@
 export type CapsuleStatus = "active" | "paused" | "draft" | "archived";
 export type ComputationClass = "A" | "B" | "C";
 
+/**
+ * How the plugin extracts data from the capsule's source notes into
+ * schema-typed records. See capsule-node/design/001-data-sharing.md in
+ * the vault for the full rationale. Slice 6a ships `frontmatter-list`
+ * only; `table` and `code-fence` land in follow-up slices.
+ */
+export type ExtractionMode = "none" | "frontmatter-list";
+
 export interface Manifest {
 	capsule_id: string;
 	schema: string;
@@ -8,6 +16,13 @@ export interface Manifest {
 	floor_price: string;
 	computation_classes: ComputationClass[];
 	tags: string[];
+	/** Source notes whose content this capsule exposes. Each entry is
+	 * either a wikilink (`"[[path]]"` or `"[[path|alias]]"`) or a plain
+	 * vault-relative path. Absent / empty means "no data yet — drafts". */
+	sources?: string[];
+	/** How to turn the source notes into records. Defaults to `none`
+	 * (capsule has no data pipeline yet). */
+	extraction?: ExtractionMode;
 }
 
 const CAP_ID_SUFFIX_ALPHABET = "abcdefghijklmnopqrstuvwxyz0123456789";

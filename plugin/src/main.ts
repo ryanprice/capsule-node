@@ -2,8 +2,9 @@ import { debounce, Notice, Plugin, TAbstractFile, TFile } from "obsidian";
 import { CapsuleManager } from "./capsule-manager";
 import { DaemonBridge, KeyringCallResult } from "./daemon-bridge";
 import { CapsuleDecorator } from "./decorator";
-import { FrontmatterError } from "./frontmatter";
+import { FrontmatterError, parseCapsuleNote } from "./frontmatter";
 import { promptInitKeyring, promptUnlockKeyring } from "./keyring-modal";
+import { PreviewCapsuleDataModal } from "./preview-modal";
 import { CapsuleNodeSettings, CapsuleNodeSettingTab, DEFAULT_SETTINGS } from "./settings";
 
 const SYNC_DEBOUNCE_MS = 400;
@@ -63,6 +64,14 @@ export default class CapsuleNodePlugin extends Plugin {
 			name: "Lock keyring",
 			callback: () => {
 				void this.runLockKeyring();
+			},
+		});
+
+		this.addCommand({
+			id: "preview-capsule-data",
+			name: "Preview capsule data",
+			callback: () => {
+				void this.runPreviewCapsuleData();
 			},
 		});
 
@@ -151,6 +160,24 @@ export default class CapsuleNodePlugin extends Plugin {
 			new Notice(`${successPrefix} (state: ${result.state}).`);
 		} else {
 			new Notice(`Keyring operation failed: ${result.reason}`);
+		}
+	}
+
+	private async runPreviewCapsuleData(): Promise<void> {
+		const file = this.app.workspace.getActiveFile();
+		if (!file || !this.capsules.isCapsuleNotePath(file.path)) {
+			new Notice(
+				"Open a capsule note first (Capsules/cap_*.md), then run this command.",
+			);
+			return;
+		}
+		try {
+			const content = await this.app.vault.read(file);
+			const parsed = parseCapsuleNote(content);
+			new PreviewCapsuleDataModal(this.app, file, parsed.manifest).open();
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			new Notice(`Cannot preview: ${message}`);
 		}
 	}
 

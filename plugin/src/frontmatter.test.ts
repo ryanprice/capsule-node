@@ -50,7 +50,41 @@ describe("parseCapsuleNote", () => {
 		const m = sampleManifest();
 		const note = buildCapsuleNote({ manifest: m });
 		const parsed = parseCapsuleNote(note);
-		assert.deepEqual(parsed.manifest, m);
+		// buildCapsuleNote fills in defaults for sources/extraction; the
+		// round-tripped manifest has those populated too.
+		assert.deepEqual(parsed.manifest, {
+			...m,
+			sources: [],
+			extraction: "none",
+		});
+	});
+
+	it("round-trips sources + extraction when set", () => {
+		const m = {
+			...sampleManifest(),
+			sources: ["[[raw/cgm-2026-01]]", "raw/cgm-2026-02"],
+			extraction: "frontmatter-list" as const,
+		};
+		const note = buildCapsuleNote({ manifest: m });
+		const parsed = parseCapsuleNote(note);
+		assert.deepEqual(parsed.manifest.sources, m.sources);
+		assert.equal(parsed.manifest.extraction, "frontmatter-list");
+	});
+
+	it("rejects invalid extraction mode", () => {
+		const bad = [
+			"---",
+			"capsule_id: cap_abc123",
+			"schema: capsule://x",
+			"status: draft",
+			"floor_price: 0.01",
+			"computation_classes: [A]",
+			"tags: []",
+			"extraction: bogus",
+			"---",
+			"",
+		].join("\n");
+		assert.throws(() => parseCapsuleNote(bad), FrontmatterError);
 	});
 
 	it("round-trips daemon fields when present", () => {
@@ -146,8 +180,13 @@ describe("replaceDaemonZone", () => {
 		});
 
 		const parsed = parseCapsuleNote(updated);
-		// User zone untouched.
-		assert.deepEqual(parsed.manifest, sampleManifest());
+		// User zone untouched. buildCapsuleNote emits defaults for sources +
+		// extraction; the round-trip includes those alongside sampleManifest.
+		assert.deepEqual(parsed.manifest, {
+			...sampleManifest(),
+			sources: [],
+			extraction: "none",
+		});
 		// Daemon zone reflects the rewrite.
 		assert.equal(parsed.daemonFields.payload_cid, "bafy-new");
 		assert.equal(parsed.daemonFields.queries_served, 7);

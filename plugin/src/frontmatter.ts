@@ -1,5 +1,11 @@
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
-import { CapsuleStatus, ComputationClass, isValidCapsuleId, Manifest } from "./manifest";
+import {
+	CapsuleStatus,
+	ComputationClass,
+	ExtractionMode,
+	isValidCapsuleId,
+	Manifest,
+} from "./manifest";
 
 // Note: Obsidian also exports parseYaml/stringifyYaml, which are thin
 // wrappers over the same `yaml` package. Importing the library directly
@@ -104,6 +110,14 @@ function toComputationClasses(raw: unknown): ComputationClass[] {
 	});
 }
 
+function toExtractionMode(raw: unknown): ExtractionMode | undefined {
+	if (raw == null) return undefined;
+	if (raw === "none" || raw === "frontmatter-list") return raw;
+	throw new FrontmatterError(
+		`extraction must be one of: none, frontmatter-list`
+	);
+}
+
 /**
  * Parse a capsule note's full content into a Manifest plus any
  * daemon-managed fields present. Throws FrontmatterError on malformed input.
@@ -135,6 +149,10 @@ export function parseCapsuleNote(content: string): ParsedNote {
 		throw new FrontmatterError("floor_price missing or not a string");
 	}
 
+	const sources =
+		userYaml.sources == null ? undefined : toStringArray(userYaml.sources, "sources");
+	const extraction = toExtractionMode(userYaml.extraction);
+
 	const manifest: Manifest = {
 		capsule_id: userYaml.capsule_id,
 		schema: userYaml.schema,
@@ -142,6 +160,8 @@ export function parseCapsuleNote(content: string): ParsedNote {
 		floor_price: userYaml.floor_price,
 		computation_classes: toComputationClasses(userYaml.computation_classes),
 		tags: toStringArray(userYaml.tags ?? [], "tags"),
+		...(sources !== undefined ? { sources } : {}),
+		...(extraction !== undefined ? { extraction } : {}),
 	};
 
 	const daemonFields: DaemonManagedFields = {
@@ -197,6 +217,8 @@ export function buildCapsuleNote(params: {
 		floor_price: params.manifest.floor_price,
 		computation_classes: params.manifest.computation_classes,
 		tags: params.manifest.tags,
+		sources: params.manifest.sources ?? [],
+		extraction: params.manifest.extraction ?? "none",
 	}).trimEnd();
 
 	const daemon = params.daemonFields ?? {
