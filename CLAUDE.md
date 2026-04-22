@@ -166,6 +166,14 @@ To use the plugin inside Obsidian during development: symlink `plugin/` into `<v
 
 `scripts/dev.sh` sources `.env`, runs `npm run dev` and `cargo run` in parallel, and cleans both up on Ctrl-C. Requires `.env` with `CAPSULE_VAULT_PATH` set.
 
+### One-shot setup
+
+`scripts/setup.sh` is the clone-and-go entry point. Checks prereqs (cargo, node ≥ 20, npm), prompts for the vault path if `.env` is missing, builds both halves (`cargo build --release`, `npm install && npm run build`), and runs `install-plugin.sh` to copy the built plugin into the vault. Supports `--vault <path>` and `--non-interactive` for CI. Run `./scripts/setup.sh --help` for the full flag list.
+
+### End-to-end smoke
+
+`scripts/e2e-test.sh` spins the daemon up against a disposable temp vault on ephemeral ports (17402 / 18402, so it won't collide with a running dev daemon), walks through init → manifest → 402 → lock → 503, and tears everything down. Exits non-zero on the first mismatch. Requires `jq`. Uses `daemon/target/release/capsuled` if present, falls back to the debug binary. Safe to run repeatedly.
+
 ### What's not here yet
 
 The spec's Phase 1 Foundation milestone (plugin creates capsule note → daemon detects → endpoint returns HTTP 402) builds on this walking skeleton by adding the filesystem watcher, manifest parser, and x402 stub. Those are the next features, not refactors — don't rework the current scaffolding, extend it.
