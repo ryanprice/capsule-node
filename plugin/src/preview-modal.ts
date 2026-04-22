@@ -45,8 +45,30 @@ export class PreviewCapsuleDataModal extends Modal {
 			return;
 		}
 
+		const mode = this.manifest.extraction ?? "none";
+		if (mode === "none") {
+			// The common trip-up: user added sources via the Properties panel,
+			// but the capsule was created before `extraction` had a sensible
+			// default. Tell them exactly what to do rather than silently
+			// showing "0 records".
+			const hint = contentEl.createEl("p");
+			hint.appendText("This capsule has ");
+			hint.createEl("strong", { text: `${sources.length} source${sources.length === 1 ? "" : "s"}` });
+			hint.appendText(" but ");
+			hint.createEl("code", { text: "extraction: none" });
+			hint.appendText(
+				" — no records will be produced. Add a property named ",
+			);
+			hint.createEl("code", { text: "extraction" });
+			hint.appendText(" with value ");
+			hint.createEl("code", { text: "frontmatter-list" });
+			hint.appendText(' to the capsule note, then re-run "Preview capsule data".');
+			this.addCloseButton();
+			return;
+		}
+
 		const resolved = sources.map((raw) => this.resolveSource(raw));
-		const result = extract(resolved, this.manifest.extraction ?? "none");
+		const result = extract(resolved, mode);
 
 		this.renderSummary(contentEl, result, sources.length);
 		if (result.errors.length > 0) {

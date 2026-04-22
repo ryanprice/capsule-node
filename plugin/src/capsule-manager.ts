@@ -27,6 +27,12 @@ export class CapsuleManager {
 			floor_price: params.floorPrice ?? "0.01 USDC/query",
 			computation_classes: ["A"],
 			tags: [],
+			sources: [],
+			// Default to the real extractor — a fresh capsule with `none`
+			// is useless until the user thinks to flip it. With
+			// frontmatter-list as the default, adding a wikilink to
+			// sources immediately produces records in the preview.
+			extraction: "frontmatter-list",
 		};
 
 		const folder = this.capsuleFolder();
