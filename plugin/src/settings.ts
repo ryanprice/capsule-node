@@ -1,4 +1,4 @@
-import { App, PluginSettingTab, Setting } from "obsidian";
+import { App, Notice, PluginSettingTab, Setting } from "obsidian";
 import type CapsuleNodePlugin from "./main";
 
 export interface CapsuleNodeSettings {
@@ -62,34 +62,46 @@ export class CapsuleNodeSettingTab extends PluginSettingTab {
 		// the fetch without reopening the settings tab.
 		containerEl.createEl("h3", { text: "Node identity" });
 
-		const keyringSetting = new Setting(containerEl)
-			.setName("Keyring status")
-			.setDesc("Loading…")
-			.setDisabled(true);
+		const keyringSetting = new Setting(containerEl).setName("Keyring status").setDesc("Loading…");
+
+		// Mutable ref captured by both the refresh path (which updates it) and
+		// the copy button's click handler (which reads the current value).
+		// A closure over a local won't work — addExtraButton's callback captures
+		// the variable at registration time, not at click time.
+		const walletRef: { current: string | null } = { current: null };
 
 		const walletSetting = new Setting(containerEl)
 			.setName("Wallet address")
 			.setDesc("Loading…")
-			.setDisabled(true);
+			.addExtraButton((btn) =>
+				btn
+					.setIcon("copy")
+					.setTooltip("Copy address to clipboard")
+					.onClick(() => {
+						void this.copyWalletAddress(walletRef.current);
+					}),
+			);
 
 		new Setting(containerEl).addButton((btn) =>
 			btn
 				.setButtonText("Refresh")
 				.setTooltip("Re-query the daemon for current keyring + wallet state.")
 				.onClick(() => {
-					void this.refreshDaemonState(keyringSetting, walletSetting);
+					void this.refreshDaemonState(keyringSetting, walletSetting, walletRef);
 				}),
 		);
 
-		void this.refreshDaemonState(keyringSetting, walletSetting);
+		void this.refreshDaemonState(keyringSetting, walletSetting, walletRef);
 	}
 
 	private async refreshDaemonState(
 		keyringSetting: Setting,
 		walletSetting: Setting,
+		walletRef: { current: string | null },
 	): Promise<void> {
 		keyringSetting.setDesc("Loading…");
 		walletSetting.setDesc("Loading…");
+		walletRef.current = null;
 
 		const result = await this.plugin.bridge.pingStatus();
 		if (!result.ok) {
@@ -101,10 +113,45 @@ export class CapsuleNodeSettingTab extends PluginSettingTab {
 
 		const keyring = result.data.keyring ?? "unknown";
 		keyringSetting.setDesc(describeKeyring(keyring));
-		walletSetting.setDesc(
-			result.data.wallet_address ?? "No address — unlock the keyring first.",
-		);
+
+		const addr = result.data.wallet_address;
+		if (addr) {
+			walletRef.current = addr;
+			walletSetting.setDesc(renderWalletAddress(addr));
+		} else {
+			walletRef.current = null;
+			walletSetting.setDesc("No address — unlock the keyring first.");
+		}
 	}
+
+	private async copyWalletAddress(addr: string | null): Promise<void> {
+		if (!addr) {
+			new Notice("No wallet address to copy yet.");
+			return;
+		}
+		try {
+			await navigator.clipboard.writeText(addr);
+			new Notice("Wallet address copied.");
+		} catch (err) {
+			const message = err instanceof Error ? err.message : String(err);
+			new Notice(`Copy failed: ${message}`);
+		}
+	}
+}
+
+/**
+ * Render an Ethereum address as a monospace, user-selectable element.
+ * Obsidian's Setting.setDesc accepts a DocumentFragment, so a <code> node
+ * with explicit `user-select: text` survives any parent CSS that would
+ * otherwise block text selection in description rows.
+ */
+function renderWalletAddress(addr: string): DocumentFragment {
+	const frag = document.createDocumentFragment();
+	const code = frag.createEl("code", { text: addr });
+	code.style.userSelect = "text";
+	code.style.cursor = "text";
+	code.style.fontSize = "0.95em";
+	return frag;
 }
 
 function describeKeyring(state: string): string {
