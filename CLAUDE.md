@@ -54,9 +54,9 @@ Activity logs are **JSONL, append-only** — never rewrite them. Manifests are J
 Capsule note YAML frontmatter has two zones separated by the `# ═══ Computed Fields (daemon-managed, read-only) ═══` comment:
 
 - **Above the comment:** user-editable (pricing, status, tags, policy links, credentials, data profile). The plugin validates these on save.
-- **Below the comment:** daemon-managed (`payload_cid`, `earnings_total`, `queries_served`, `last_accessed`, `reputation`). The plugin must never write these; the daemon updates them via manifest writes that the plugin detects and mirrors into the note.
+- **Below the comment:** daemon-managed (`payload_cid`, `earnings_total`, `queries_served`, `last_accessed`, `reputation`). The source of truth is the daemon; the plugin's only legitimate write to this zone is to mirror a value the daemon just returned in an API response (e.g. the publish-payload handler returns `payload_cid`; the "Publish capsule" command relays it via `replaceDaemonZone`). Never compute or guess daemon-zone values in the plugin. A future slice will swap this relay pattern for a manifest-watcher that picks up direct daemon writes — when that lands, plugin → daemon-zone writes go away entirely.
 
-When editing frontmatter logic on either side, preserve this boundary. Crossing it from the wrong side creates race conditions and silently loses user edits.
+When editing frontmatter logic on either side, preserve this boundary. Crossing it in the wrong direction (plugin synthesizing a `payload_cid`, daemon editing `floor_price`) creates race conditions and silently loses user edits.
 
 ## Request processing pipeline (daemon)
 

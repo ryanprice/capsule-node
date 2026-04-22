@@ -33,6 +33,23 @@ export type KeyringFailureReason =
 	| "bad_request"
 	| "server_error";
 
+export interface PublishSuccess {
+	payload_cid: string;
+	size: number;
+	record_count: number;
+}
+
+export type PublishFailureReason =
+	| "unreachable"
+	| "keyring_locked"
+	| "not_found"
+	| "bad_request"
+	| "server_error";
+
+export type PublishResult =
+	| { ok: true; data: PublishSuccess }
+	| { ok: false; reason: PublishFailureReason; message?: string };
+
 export class DaemonBridge {
 	constructor(private port: number) {}
 
@@ -78,6 +95,57 @@ export class DaemonBridge {
 		const response = await this.post("/api/v1/keyring/lock", "");
 		if (!response) return { ok: false, reason: "unreachable" };
 		return this.parseKeyringResponse(response);
+	}
+
+	/**
+	 * POST records → daemon encrypts + writes `.capsule/payloads/{cid}.enc`.
+	 * Keeps records as `unknown[]` on the wire — the daemon doesn't care
+	 * about their shape, only the plugin's extraction layer does.
+	 */
+	async publishPayload(
+		capsuleId: string,
+		records: unknown[],
+	): Promise<PublishResult> {
+		const response = await this.post(
+			`/api/v1/capsules/${capsuleId}/payload`,
+			JSON.stringify({ records }),
+		);
+		if (!response) return { ok: false, reason: "unreachable" };
+		if (response.status >= 200 && response.status < 300) {
+			try {
+				const data = response.json as PublishSuccess;
+				if (
+					typeof data.payload_cid === "string" &&
+					typeof data.size === "number" &&
+					typeof data.record_count === "number"
+				) {
+					return { ok: true, data };
+				}
+			} catch {
+				// fall through
+			}
+			return { ok: false, reason: "server_error", message: "bad response shape" };
+		}
+		const message = (() => {
+			try {
+				return (response.json as { error?: string })?.error;
+			} catch {
+				return undefined;
+			}
+		})();
+		const reason: PublishFailureReason = (() => {
+			switch (response.status) {
+				case 404:
+					return "not_found";
+				case 503:
+					return "keyring_locked";
+				case 400:
+					return "bad_request";
+				default:
+					return "server_error";
+			}
+		})();
+		return { ok: false, reason, message };
 	}
 
 	private async postPassphrase(

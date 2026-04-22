@@ -1,12 +1,6 @@
 import { App, Modal, Setting, TFile } from "obsidian";
-import {
-	ExtractionError,
-	ExtractionResult,
-	extract,
-	needsContent,
-	parseSourceRef,
-	ResolvedSource,
-} from "./extraction";
+import { runExtraction } from "./capsule-extract";
+import { ExtractionError, ExtractionResult } from "./extraction";
 import { Manifest } from "./manifest";
 
 const MAX_RECORDS_SHOWN = 20;
@@ -58,45 +52,19 @@ export class PreviewCapsuleDataModal extends Modal {
 		// that's async. Show a placeholder synchronously, then replace
 		// when the resolve+extract pass finishes.
 		const status = contentEl.createEl("p", { text: "Loading…" });
-		void this.runExtraction(sources).then((result) => {
-			status.remove();
-			this.renderSummary(contentEl, result, sources.length);
-			if (result.errors.length > 0) this.renderErrors(contentEl, result.errors);
-			if (result.records.length > 0) this.renderRecords(contentEl, result.records);
-			this.addCloseButton();
-		});
+		void runExtraction(this.app, this.capsuleFile, this.manifest).then(
+			(result) => {
+				status.remove();
+				this.renderSummary(contentEl, result, sources.length);
+				if (result.errors.length > 0) this.renderErrors(contentEl, result.errors);
+				if (result.records.length > 0) this.renderRecords(contentEl, result.records);
+				this.addCloseButton();
+			},
+		);
 	}
 
 	onClose(): void {
 		this.contentEl.empty();
-	}
-
-	private async runExtraction(sources: string[]): Promise<ExtractionResult> {
-		const mode = this.manifest.extraction ?? "none";
-		const withContent = needsContent(mode);
-		const resolved = await Promise.all(
-			sources.map((raw) => this.resolveSource(raw, withContent)),
-		);
-		return extract(resolved, mode);
-	}
-
-	private async resolveSource(
-		raw: string,
-		readContent: boolean,
-	): Promise<ResolvedSource> {
-		const linkpath = parseSourceRef(raw);
-		const file = this.app.metadataCache.getFirstLinkpathDest(
-			linkpath,
-			this.capsuleFile.path,
-		);
-		if (!file) {
-			return { rawRef: raw, path: linkpath, frontmatter: null, content: null };
-		}
-		const cache = this.app.metadataCache.getFileCache(file);
-		const frontmatter =
-			(cache?.frontmatter ?? null) as Record<string, unknown> | null;
-		const content = readContent ? await this.app.vault.read(file) : null;
-		return { rawRef: raw, path: file.path, frontmatter, content };
 	}
 
 	private renderNoneHint(sourceCount: number): void {

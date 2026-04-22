@@ -1,5 +1,5 @@
 use axum::{
-    extract::State,
+    extract::{Path, State},
     http::StatusCode,
     response::IntoResponse,
     routing::{get, post},
@@ -11,7 +11,8 @@ use zeroize::Zeroizing;
 
 use super::{AppState, KeyringSlot};
 use crate::keyring::{self, KeyringError};
-use crate::manifest::{CapsuleStatus, ComputationClass};
+use crate::manifest::{CapsuleId, CapsuleStatus, ComputationClass};
+use crate::payload;
 
 pub fn router(state: AppState) -> Router {
     Router::new()
@@ -21,6 +22,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/v1/keyring/init", post(keyring_init))
         .route("/api/v1/keyring/unlock", post(keyring_unlock))
         .route("/api/v1/keyring/lock", post(keyring_lock))
+        .route("/api/v1/capsules/{cid}/payload", post(publish_payload))
         .with_state(state)
         .layer(TraceLayer::new_for_http())
 }
@@ -201,6 +203,91 @@ fn status_response(label: &'static str) -> axum::response::Response {
 
 fn err_response(code: StatusCode, msg: &'static str) -> axum::response::Response {
     (code, Json(ErrorBody::new(msg))).into_response()
+}
+
+// ─── Payload publishing ─────────────────────────────────────────────────────
+//
+// POST /api/v1/capsules/{cid}/payload accepts { records: [...] } from the
+// plugin, encrypts the serialized body with the capsule's derived payload
+// key, writes .capsule/payloads/{cid}.enc (0600), and returns the new
+// payload_cid. Fails closed:
+//   * 404 if the capsule isn't in the registry (no manifest)
+//   * 503 if the keyring is not unlocked — encrypt needs the master secret
+//   * 500 on I/O or crypto failures (with a generic message)
+
+#[derive(Deserialize)]
+struct PublishBody {
+    records: Vec<serde_json::Value>,
+}
+
+#[derive(Serialize)]
+struct PublishResponse {
+    payload_cid: String,
+    size: u64,
+    record_count: usize,
+}
+
+async fn publish_payload(
+    State(state): State<AppState>,
+    Path(cid): Path<String>,
+    Json(body): Json<PublishBody>,
+) -> impl IntoResponse {
+    let Ok(id) = CapsuleId::new(&cid) else {
+        return err_response(StatusCode::NOT_FOUND, "no such capsule");
+    };
+    if state.registry().get(&id).is_none() {
+        return err_response(StatusCode::NOT_FOUND, "no such capsule");
+    }
+
+    // Acquire the master secret under the read lock and call with_secret
+    // which hands us a &[u8; 32] scoped to the closure. The secret never
+    // leaves the daemon as a value.
+    let slot = state.keyring().read().expect("keyring lock poisoned");
+    let KeyringSlot::Unlocked(ref unlocked) = *slot else {
+        return err_response(StatusCode::SERVICE_UNAVAILABLE, "keyring is not unlocked");
+    };
+
+    // Serialize the records. We wrap in `{ "records": [...] }` on disk so
+    // future slices can add sibling metadata (schema hash, recorded-at
+    // timestamp) without bumping the payload format version.
+    let wrapper = serde_json::json!({ "records": body.records });
+    let plaintext = match serde_json::to_vec(&wrapper) {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::error!(error = %e, "failed to serialize payload");
+            return err_response(StatusCode::INTERNAL_SERVER_ERROR, "serialize failed");
+        }
+    };
+    let record_count = body.records.len();
+
+    let result = unlocked
+        .with_secret(|secret| payload::write(state.capsule_dir(), id.as_str(), secret, &plaintext));
+    drop(slot);
+
+    match result {
+        Ok(written) => {
+            state.record_activity();
+            tracing::info!(
+                capsule_id = %id,
+                record_count,
+                payload_cid = %written.payload_cid,
+                "payload published"
+            );
+            (
+                StatusCode::OK,
+                Json(PublishResponse {
+                    payload_cid: written.payload_cid,
+                    size: written.size,
+                    record_count,
+                }),
+            )
+                .into_response()
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "payload write failed");
+            err_response(StatusCode::INTERNAL_SERVER_ERROR, "payload write failed")
+        }
+    }
 }
 
 /// Translate a KeyringError into an HTTP response. Deliberately generic

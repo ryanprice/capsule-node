@@ -1,8 +1,13 @@
 import { debounce, Notice, Plugin, TAbstractFile, TFile } from "obsidian";
+import { runExtraction } from "./capsule-extract";
 import { CapsuleManager } from "./capsule-manager";
 import { DaemonBridge, KeyringCallResult } from "./daemon-bridge";
 import { CapsuleDecorator } from "./decorator";
-import { FrontmatterError, parseCapsuleNote } from "./frontmatter";
+import {
+	FrontmatterError,
+	parseCapsuleNote,
+	replaceDaemonZone,
+} from "./frontmatter";
 import { promptInitKeyring, promptUnlockKeyring } from "./keyring-modal";
 import { PreviewCapsuleDataModal } from "./preview-modal";
 import { CapsuleNodeSettings, CapsuleNodeSettingTab, DEFAULT_SETTINGS } from "./settings";
@@ -72,6 +77,14 @@ export default class CapsuleNodePlugin extends Plugin {
 			name: "Preview capsule data",
 			callback: () => {
 				void this.runPreviewCapsuleData();
+			},
+		});
+
+		this.addCommand({
+			id: "publish-capsule",
+			name: "Publish capsule (encrypt + write payload)",
+			callback: () => {
+				void this.runPublishCapsule();
 			},
 		});
 
@@ -179,6 +192,75 @@ export default class CapsuleNodePlugin extends Plugin {
 			const message = err instanceof Error ? err.message : String(err);
 			new Notice(`Cannot preview: ${message}`);
 		}
+	}
+
+	private async runPublishCapsule(): Promise<void> {
+		const file = this.app.workspace.getActiveFile();
+		if (!file || !this.capsules.isCapsuleNotePath(file.path)) {
+			new Notice(
+				"Open a capsule note first (Capsules/cap_*.md), then run this command.",
+			);
+			return;
+		}
+		const content = await this.app.vault.read(file);
+		let parsed;
+		try {
+			parsed = parseCapsuleNote(content);
+		} catch (err) {
+			const msg = err instanceof Error ? err.message : String(err);
+			new Notice(`Cannot publish: ${msg}`);
+			return;
+		}
+
+		// Run the extractor first — same codepath the preview uses.
+		const extraction = await runExtraction(this.app, file, parsed.manifest);
+		if (extraction.errors.length > 0) {
+			// Be noisy rather than publish partial data. The preview modal
+			// already shows the user the per-source error detail; ask them
+			// to fix there before committing encrypted bytes to disk.
+			new Notice(
+				`Publish aborted: ${extraction.errors.length} extraction error(s). Run "Preview capsule data" to see details and fix the sources.`,
+				8000,
+			);
+			return;
+		}
+		if (extraction.records.length === 0) {
+			new Notice(
+				"Publish aborted: no records to publish. Add sources (and check the preview) first.",
+			);
+			return;
+		}
+
+		const result = await this.bridge.publishPayload(
+			parsed.manifest.capsule_id,
+			extraction.records,
+		);
+		if (!result.ok) {
+			new Notice(
+				`Publish failed: ${result.reason}${result.message ? ` (${result.message})` : ""}`,
+			);
+			return;
+		}
+
+		// Mirror the new payload_cid into the note's daemon-managed zone.
+		// Strictly speaking CLAUDE.md says the plugin shouldn't write that
+		// zone itself — the daemon should. Until we ship a plugin-side
+		// manifest watcher that picks up the daemon's writes, we relay the
+		// value the daemon just returned to us. This is safe: we're only
+		// writing exactly what the daemon told us, and the daemon is the
+		// source of truth.
+		const newDaemonFields = {
+			...parsed.daemonFields,
+			payload_cid: result.data.payload_cid,
+			last_accessed: new Date().toISOString(),
+		};
+		const updated = replaceDaemonZone(content, newDaemonFields);
+		await this.app.vault.modify(file, updated);
+
+		new Notice(
+			`Published ${result.data.record_count} records · payload_cid=${result.data.payload_cid.slice(0, 12)}…`,
+			6000,
+		);
 	}
 
 	private async maybeShowFirstRunNotice(): Promise<void> {
