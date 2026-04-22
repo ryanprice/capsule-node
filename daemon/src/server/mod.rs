@@ -1,6 +1,6 @@
 use std::path::PathBuf;
 use std::sync::{Arc, RwLock};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use crate::keyring::{LockedKeyring, UnlockedKeyring};
 use crate::registry::Registry;
@@ -21,6 +21,15 @@ struct AppStateInner {
     version: &'static str,
     registry: Registry,
     keyring: Arc<RwLock<KeyringSlot>>,
+    /// Last time the daemon did something that consumed the unlocked
+    /// master secret. Updated at unlock/init time and on every endpoint
+    /// that produces a signed or keyring-gated response. The auto-lock
+    /// task compares `last_activity.elapsed()` against `auto_lock` and
+    /// transitions the slot back to Locked when idle too long.
+    last_activity: Arc<RwLock<Instant>>,
+    /// Idle timeout after which the keyring auto-locks. `None` disables
+    /// auto-lock (spec §9.4 allows this for always-on dev setups).
+    auto_lock: Option<Duration>,
 }
 
 /// Current state of the node identity keyring.
@@ -56,6 +65,7 @@ impl AppState {
         capsule_dir: PathBuf,
         registry: Registry,
         keyring: KeyringSlot,
+        auto_lock: Option<Duration>,
     ) -> Self {
         Self {
             inner: Arc::new(AppStateInner {
@@ -65,8 +75,42 @@ impl AppState {
                 version: env!("CARGO_PKG_VERSION"),
                 registry,
                 keyring: Arc::new(RwLock::new(keyring)),
+                last_activity: Arc::new(RwLock::new(Instant::now())),
+                auto_lock,
             }),
         }
+    }
+
+    /// Bump the activity timestamp. Call after any endpoint that consumed
+    /// the unlocked master secret (e.g. after building a 402 response that
+    /// commits to the node's payout address). Call on unlock/init so a
+    /// just-unlocked keyring doesn't auto-lock immediately.
+    pub fn record_activity(&self) {
+        if let Ok(mut ts) = self.inner.last_activity.write() {
+            *ts = Instant::now();
+        }
+    }
+
+    /// Configured idle timeout. None means auto-lock is disabled.
+    pub fn auto_lock(&self) -> Option<Duration> {
+        self.inner.auto_lock
+    }
+
+    /// Seconds remaining until auto-lock fires, given current activity.
+    /// None if the keyring isn't Unlocked or auto-lock is disabled.
+    pub fn auto_lock_seconds_remaining(&self) -> Option<u64> {
+        let slot = self.inner.keyring.read().ok()?;
+        if !matches!(*slot, KeyringSlot::Unlocked(_)) {
+            return None;
+        }
+        let timeout = self.inner.auto_lock?;
+        let last = self.inner.last_activity.read().ok()?;
+        let elapsed = last.elapsed();
+        Some(timeout.saturating_sub(elapsed).as_secs())
+    }
+
+    pub(crate) fn last_activity(&self) -> Arc<RwLock<Instant>> {
+        Arc::clone(&self.inner.last_activity)
     }
 
     pub fn uptime_seconds(&self) -> u64 {

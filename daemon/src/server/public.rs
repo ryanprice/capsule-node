@@ -172,6 +172,11 @@ async fn compute(State(state): State<AppState>, Path(cid): Path<String>) -> impl
             computation_classes: manifest.computation_classes,
         },
     };
+    // We're committing to the node's payout address in the response body,
+    // which is derived from the unlocked master secret. That counts as
+    // activity for the auto-lock timer — an agent hitting /compute on a
+    // regular schedule keeps the keyring alive.
+    state.record_activity();
     (StatusCode::PAYMENT_REQUIRED, Json(body)).into_response()
 }
 

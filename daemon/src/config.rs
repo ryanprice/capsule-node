@@ -24,6 +24,17 @@ pub struct Config {
     /// Log filter (overrides RUST_LOG if set).
     #[arg(long, env = "CAPSULE_LOG_LEVEL", default_value = "info")]
     pub log_level: String,
+
+    /// Seconds of inactivity after which the keyring auto-locks. `0`
+    /// disables auto-lock entirely. Default 1800 (30 min) matches spec
+    /// §9.4. "Activity" means an endpoint that consumed the unlocked
+    /// master secret to produce its response.
+    #[arg(
+        long = "auto-lock-secs",
+        env = "CAPSULE_KEYRING_AUTO_LOCK_SECS",
+        default_value_t = 1800
+    )]
+    pub auto_lock_secs: u64,
 }
 
 #[cfg(test)]

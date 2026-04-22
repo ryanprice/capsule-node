@@ -6,6 +6,9 @@ use tokio::net::TcpListener;
 use tracing::info;
 use tracing_subscriber::EnvFilter;
 
+use std::time::Duration;
+
+use capsuled::autolock;
 use capsuled::config::Config;
 use capsuled::error::DaemonError;
 use capsuled::keyring;
@@ -59,12 +62,25 @@ async fn main() -> anyhow::Result<()> {
     let keyring_slot = load_keyring_slot(&capsule_dir);
     info!(state = keyring_slot.status_label(), "keyring initialized");
 
+    let auto_lock = if config.auto_lock_secs == 0 {
+        info!("auto-lock disabled (CAPSULE_KEYRING_AUTO_LOCK_SECS=0)");
+        None
+    } else {
+        info!(secs = config.auto_lock_secs, "auto-lock enabled");
+        Some(Duration::from_secs(config.auto_lock_secs))
+    };
+
     let state = AppState::new(
         config.vault_path.clone(),
         capsule_dir.clone(),
         capsule_registry,
         keyring_slot,
+        auto_lock,
     );
+
+    // Hold the handle for the lifetime of main() — dropping it signals the
+    // task to stop. Kept as _ so `serve` owns the foreground.
+    let _autolock_handle = autolock::spawn(state.clone());
 
     capsuled::serve(mgmt_listener, public_listener, state, shutdown_signal())
         .await

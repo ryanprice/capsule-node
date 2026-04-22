@@ -112,7 +112,9 @@ export class CapsuleNodeSettingTab extends PluginSettingTab {
 		}
 
 		const keyring = result.data.keyring ?? "unknown";
-		keyringSetting.setDesc(describeKeyring(keyring));
+		keyringSetting.setDesc(
+			describeKeyring(keyring, result.data.auto_lock_seconds_remaining),
+		);
 
 		const addr = result.data.wallet_address;
 		if (addr) {
@@ -154,17 +156,31 @@ function renderWalletAddress(addr: string): DocumentFragment {
 	return frag;
 }
 
-function describeKeyring(state: string): string {
+function describeKeyring(state: string, autoLockSecondsRemaining?: number): string {
 	switch (state) {
 		case "none":
 			return "None — run \"Capsule Node: Initialize keyring\".";
 		case "locked":
 			return "Locked — run \"Capsule Node: Unlock keyring\".";
 		case "unlocked":
-			return "Unlocked.";
+			if (typeof autoLockSecondsRemaining === "number") {
+				return `Unlocked — auto-locks in ${formatDuration(autoLockSecondsRemaining)}.`;
+			}
+			return "Unlocked (auto-lock disabled).";
 		default:
 			return `Unknown (${state}).`;
 	}
+}
+
+function formatDuration(seconds: number): string {
+	if (seconds <= 0) return "any moment";
+	if (seconds < 60) return `${seconds}s`;
+	const m = Math.floor(seconds / 60);
+	const s = seconds % 60;
+	if (m < 60) return s === 0 ? `${m}m` : `${m}m ${s}s`;
+	const h = Math.floor(m / 60);
+	const mm = m % 60;
+	return mm === 0 ? `${h}h` : `${h}h ${mm}m`;
 }
 
 function vaultPath(app: App): string {

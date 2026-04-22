@@ -36,6 +36,11 @@ struct StatusResponse {
     /// EIP-55 Ethereum address. Only present when `keyring == "unlocked"`.
     #[serde(skip_serializing_if = "Option::is_none")]
     wallet_address: Option<String>,
+    /// Seconds until auto-lock fires, when keyring is unlocked and
+    /// auto-lock is enabled. `None` when the timer is disabled or the
+    /// keyring isn't currently unlocked.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    auto_lock_seconds_remaining: Option<u64>,
 }
 
 async fn status(State(state): State<AppState>) -> Json<StatusResponse> {
@@ -52,6 +57,7 @@ async fn status(State(state): State<AppState>) -> Json<StatusResponse> {
         capsule_count: state.registry().len(),
         keyring: keyring_label,
         wallet_address: state.wallet_address(),
+        auto_lock_seconds_remaining: state.auto_lock_seconds_remaining(),
     })
 }
 
@@ -141,6 +147,8 @@ async fn keyring_init(
     match keyring::create(&path, &passphrase) {
         Ok(unlocked) => {
             *slot = KeyringSlot::Unlocked(unlocked);
+            drop(slot);
+            state.record_activity();
             status_response("unlocked")
         }
         Err(e) => keyring_error_response(e),
@@ -162,6 +170,8 @@ async fn keyring_unlock(
         KeyringSlot::Locked(locked) => match locked.unlock(&passphrase) {
             Ok(unlocked) => {
                 *slot = KeyringSlot::Unlocked(unlocked);
+                drop(slot);
+                state.record_activity();
                 status_response("unlocked")
             }
             Err(e) => keyring_error_response(e),

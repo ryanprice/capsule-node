@@ -23,6 +23,7 @@ async fn endpoints_respond_on_both_surfaces() {
         capsule_dir,
         Registry::new(),
         KeyringSlot::None,
+        None, // auto-lock disabled in the smoke test
     );
 
     let (mgmt_listener, mgmt_addr) = bind_ephemeral_on([127, 0, 0, 1]).await;

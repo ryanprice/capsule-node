@@ -10,6 +10,9 @@ export interface DaemonStatus {
 	keyring?: KeyringState;
 	/** EIP-55 Ethereum address; only present when keyring is "unlocked". */
 	wallet_address?: string;
+	/** Seconds remaining until auto-lock fires. Only present when
+	 * keyring is "unlocked" and auto-lock is enabled. */
+	auto_lock_seconds_remaining?: number;
 }
 
 export type KeyringState = "none" | "locked" | "unlocked";

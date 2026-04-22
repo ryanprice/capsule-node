@@ -1,3 +1,4 @@
+pub mod autolock;
 pub mod config;
 pub mod error;
 pub mod keyring;
